@@ -2,11 +2,11 @@
 #define _DEFAULT_SOURCE 1
 #define _GNU_SOURCE 1
 
-/* ndx-mod.h must come first so it sets __NDX_CALLER_PATH_DEFINED__ before
- * ndx.h is pulled in transitively by ndc.h */
-#include <ttypt/ndx-mod.h>
-#include <ttypt/ndc.h>
-#include <ttypt/qmap.h>
+/* xy-mod.h must come first so it defines the module xy context used by the
+ * XY_CALL dispatches in this translation unit */
+#include <ttypt/xy-mod.h>
+#include <ttypt/axil.h>
+#include <ttypt/corm.h>
 #include <ttypt/qsys.h>
 
 #include <arpa/telnet.h>
@@ -41,12 +41,12 @@ int setgroups(int, const gid_t *);
 int initgroups(const char *, gid_t);
 #endif
 
-#ifndef NDC_PREFIX
-#define NDC_PREFIX "/usr/local"
+#ifndef AXIL_PREFIX
+#define AXIL_PREFIX "/usr/local"
 #endif
 
-#ifndef NDC_HTDOCS
-#define NDC_HTDOCS NDC_PREFIX "/share/ndc/htdocs"
+#ifndef AXIL_HTDOCS
+#define AXIL_HTDOCS AXIL_PREFIX "/share/axil/htdocs"
 #endif
 
 /* OpenBSD may not define ECHOCTL */
@@ -55,7 +55,7 @@ int initgroups(const char *, gid_t);
 #endif
 
 /* ------------------------------------------------------------------ */
-/* Per-connection PTY state stored in the module qmap                  */
+/* Per-connection PTY state stored in the module corm maps             */
 /* ------------------------------------------------------------------ */
 
 struct mux_state {
@@ -71,25 +71,25 @@ static uint32_t mux_map;
 /* pty_fd (uint32) → client_fd (uint32) reverse lookup */
 static uint32_t mux_pty_map;
 
-static uint32_t mux_state_type;  /* qmap type id for struct mux_state */
+static uint32_t mux_state_type;  /* corm type id for struct mux_state */
 
 static struct mux_state *
 mux_get(socket_t fd)
 {
-  return (struct mux_state *)qmap_get(mux_map, &(uint32_t){(uint32_t)fd});
+  return (struct mux_state *)corm_get(mux_map, &(uint32_t){(uint32_t)fd});
 }
 
 static struct mux_state *
 mux_put(socket_t fd, struct mux_state *s)
 {
-  qmap_put(mux_map, &(uint32_t){(uint32_t)fd}, s);
-  return (struct mux_state *)qmap_get(mux_map, &(uint32_t){(uint32_t)fd});
+  corm_put(mux_map, &(uint32_t){(uint32_t)fd}, s);
+  return (struct mux_state *)corm_get(mux_map, &(uint32_t){(uint32_t)fd});
 }
 
 static void
 mux_del(socket_t fd)
 {
-  qmap_del(mux_map, &(uint32_t){(uint32_t)fd});
+  corm_del(mux_map, &(uint32_t){(uint32_t)fd});
 }
 
 /* Helpers */
@@ -98,7 +98,7 @@ mux_del(socket_t fd)
 static struct passwd mux_pw;
 
 static void
-ndc_pw_free(struct passwd *target)
+axil_tty_pw_free(struct passwd *target)
 {
   free(target->pw_name);
   free(target->pw_shell);
@@ -106,7 +106,7 @@ ndc_pw_free(struct passwd *target)
 }
 
 static void
-ndc_pw_copy(struct passwd *target, struct passwd *origin)
+axil_tty_pw_copy(struct passwd *target, struct passwd *origin)
 {
   *target = *origin;
   target->pw_name  = strdup(origin->pw_name);
@@ -116,7 +116,7 @@ ndc_pw_copy(struct passwd *target, struct passwd *origin)
 }
 
 static void
-ndc_tty_update(socket_t fd)
+axil_tty_update(socket_t fd)
 {
   struct mux_state *s = mux_get(fd);
   if (!s || s->pty < 0)
@@ -140,7 +140,7 @@ drop_priviledges(socket_t fd)
   struct passwd local_pw;
   struct passwd *pw;
 
-  if (ndc_get_pw(fd, &local_pw) == 0) {
+  if (axil_get_pw(fd, &local_pw) == 0) {
     /* authenticated — use the connection user; pw_name etc. point into
        local_pw which is on the stack, but we only use it before execve */
     pw = &local_pw;
@@ -148,7 +148,7 @@ drop_priviledges(socket_t fd)
     pw = &mux_pw;
   }
 
-  if (!ndc_config.chroot) {
+  if (!axil_config.chroot) {
     WARN("NOT_CHROOTED - running with %s\n", pw->pw_name);
     return pw;
   }
@@ -175,28 +175,28 @@ command_pty(socket_t cfd, struct winsize *ws, char * const args[])
   struct mux_state *s = mux_get(cfd);
   CBUG(!s, "command_pty: no mux state for fd %d\n", cfd);
 
-  ndc_fd_watch(s->pty);
+  axil_fd_watch(s->pty);
 
   /* Mark the pty fd's reverse entry as "this is a pty master" (pid=-2) */
   struct mux_state pty_sentinel = { .pty = -2, .pid = -2 };
-  qmap_put(mux_pty_map, &(uint32_t){(uint32_t)s->pty},
+  corm_put(mux_pty_map, &(uint32_t){(uint32_t)s->pty},
       &(uint32_t){(uint32_t)cfd});
   (void)pty_sentinel; /* used above for documentation */
 
   pid_t p = fork();
   if (p == 0) { /* child */
-    ndc_fork_child_reset();
+    axil_fork_child_reset();
 
     CBUG(setsid() == -1, "setsid\n");
 
-    CBUG(!(ndc_flags(cfd) & DF_AUTHENTICATED), "NOT AUTHENTICATED\n");
+    CBUG(!(axil_flags(cfd) & DF_AUTHENTICATED), "NOT AUTHENTICATED\n");
 
     int slave_fd = open(ptsname(s->pty), O_RDWR);
     CBUG(slave_fd == -1, "open %d\n", errno);
 
     drop_priviledges(cfd);
     struct passwd local_pw;
-    if (ndc_get_pw(cfd, &local_pw) != 0) {
+    if (axil_get_pw(cfd, &local_pw) != 0) {
       local_pw = mux_pw;
     }
 
@@ -236,7 +236,7 @@ command_pty(socket_t cfd, struct winsize *ws, char * const args[])
   return p;
 }
 
-NDX_DEF(int, ndc_tty_exec,
+XY_IMPL(int, axil_tty_exec,
     socket_t, fd,
     char **, argv)
 {
@@ -244,14 +244,14 @@ NDX_DEF(int, ndc_tty_exec,
   if (!s)
     return -1;
   s->pid = command_pty(fd, &s->wsz, (char * const *)argv);
-  ndc_fd_watch(s->pty);
+  axil_fd_watch(s->pty);
   return 0;
 }
 
-NDX_DEF(int, ndc_tty_shell, socket_t, fd)
+XY_IMPL(int, axil_tty_shell, socket_t, fd)
 {
   char *argv[] = { NULL, NULL };
-  return call_ndc_tty_exec(fd, argv);
+  return axil_tty_exec(fd, argv);
 }
 
 static void
@@ -259,12 +259,12 @@ do_sh(socket_t fd,
     int argc UNUSED,
     char *argv[] UNUSED)
 {
-  call_ndc_tty_shell(fd);
+  axil_tty_shell(fd);
 }
 
-/* NDX hook implementations */
+/* axil hook implementations */
 
-NDX_DEF(int, on_ndc_connect, socket_t, fd)
+XY_IMPL(int, on_axil_connect, socket_t, fd)
 {
   struct mux_state s;
   memset(&s, 0, sizeof(s));
@@ -294,25 +294,25 @@ NDX_DEF(int, on_ndc_connect, socket_t, fd)
   struct mux_state *sp = mux_put(fd, &s);
 
   /* reverse pty→client map */
-  qmap_put(mux_pty_map, &(uint32_t){(uint32_t)sp->pty},
+  corm_put(mux_pty_map, &(uint32_t){(uint32_t)sp->pty},
       &(uint32_t){(uint32_t)fd});
 
   tcsetattr(sp->pty, TCSANOW, &sp->tty);
-  ndc_tty_update(fd);
+  axil_tty_update(fd);
 
   if (sp->wsz.ws_col || sp->wsz.ws_row)
     ioctl(sp->pty, TIOCSWINSZ, &sp->wsz);
 
   /* Auto-spawn a shell on first NAWS when connected via /tty */
   char doc_uri[BUFSIZ] = "";
-  ndc_env_get(fd, doc_uri, "DOCUMENT_URI");
+  axil_env_get(fd, doc_uri, sizeof(doc_uri), "DOCUMENT_URI");
   if (strcmp(doc_uri, "/tty") == 0)
     sp->auto_shell = 1;
 
   return 0;
 }
 
-NDX_DEF(int, on_ndc_parse,
+XY_IMPL(int, on_axil_parse,
     socket_t, fd,
     unsigned char *, input,
     int, nread)
@@ -347,7 +347,7 @@ NDX_DEF(int, on_ndc_parse,
       /* First NAWS received — spawn shell now that dimensions are set */
       if (s->auto_shell && s->pid == -1) {
         s->auto_shell = 0;
-        call_ndc_tty_shell(fd);
+        axil_tty_shell(fd);
       }
     } else if (input[i + 1] == DO && input[i + 2] == TELOPT_SGA) {
       i += 3;
@@ -370,12 +370,12 @@ NDX_DEF(int, on_ndc_parse,
   return i;
 }
 
-NDX_DEF(int, on_ndc_tick, socket_t, fd) {
+XY_IMPL(int, on_axil_tick, socket_t, fd) {
   /* fd here is an externally-watched fd — look up the client fd */
-  const uint32_t *cfd_p = qmap_get(mux_pty_map, &(uint32_t){(uint32_t)fd});
+  const uint32_t *cfd_p = corm_get(mux_pty_map, &(uint32_t){(uint32_t)fd});
 
   if (!cfd_p) {
-    ndc_clear_active(fd);
+    axil_clear_active(fd);
     return -1;
   }
 
@@ -383,7 +383,7 @@ NDX_DEF(int, on_ndc_tick, socket_t, fd) {
 
   struct mux_state *s = mux_get(cfd);
   if (!s) {
-    ndc_clear_active(fd);
+    axil_clear_active(fd);
     return -1;
   }
 
@@ -402,12 +402,12 @@ NDX_DEF(int, on_ndc_tick, socket_t, fd) {
     case -1:
       if (errno == EAGAIN || errno == EIO)
         return 0;
-      ndc_clear_active(fd);
+      axil_clear_active(fd);
       return -1;
     default:
       buf[ret] = '\0';
-      ndc_write(cfd, buf, ret);
-      ndc_tty_update(cfd);
+      axil_write(cfd, buf, ret);
+      axil_tty_update(cfd);
       goto exit;
   }
 
@@ -417,11 +417,11 @@ NDX_DEF(int, on_ndc_tick, socket_t, fd) {
   s->pid = -1;
 exit:
   if (ret < 0)
-    ndc_clear_active(fd);
+    axil_clear_active(fd);
   return ret;
 }
 
-NDX_DEF(int, on_ndc_disconnect, socket_t, fd) {
+XY_IMPL(int, on_axil_disconnect, socket_t, fd) {
   struct mux_state *s = mux_get(fd);
   if (!s)
     return 0;
@@ -430,8 +430,8 @@ NDX_DEF(int, on_ndc_disconnect, socket_t, fd) {
     if (s->pid > 0)
       kill(-s->pid, SIGKILL);
     s->pid = -1;
-    ndc_fd_unwatch(s->pty);
-    qmap_del(mux_pty_map, &(uint32_t){(uint32_t)s->pty});
+    axil_fd_unwatch(s->pty);
+    corm_del(mux_pty_map, &(uint32_t){(uint32_t)s->pty});
     close(s->pty);
     s->pty = -1;
   }
@@ -445,34 +445,34 @@ NDX_DEF(int, on_ndc_disconnect, socket_t, fd) {
 static void
 serve_htdocs(socket_t fd, const char *file)
 {
-  char htdocs[PATH_MAX - 1] = NDC_HTDOCS;
+  char htdocs[PATH_MAX - 1] = AXIL_HTDOCS;
   char path[PATH_MAX];
-  ndc_env_get(fd, htdocs, "NDC_HTDOCS");
+  axil_env_get(fd, htdocs, sizeof(htdocs), "AXIL_HTDOCS");
   snprintf(path, sizeof(path), "%s/%s", htdocs, file);
-  ndc_sendfile(fd, path);
+  axil_sendfile(fd, path);
 }
 
 static int
-handle_ndc_js(socket_t fd, char *body)
+handle_axil_js(socket_t fd, char *body)
 {
   (void)body;
-  serve_htdocs(fd, "ndc.js");
+  serve_htdocs(fd, "axil.js");
   return 0;
 }
 
 static int
-handle_ndc_css(socket_t fd, char *body)
+handle_axil_css(socket_t fd, char *body)
 {
   (void)body;
-  serve_htdocs(fd, "ndc.css");
+  serve_htdocs(fd, "axil.css");
   return 0;
 }
 
 static int
-handle_ndc_tty_js(socket_t fd, char *body)
+handle_axil_tty_js(socket_t fd, char *body)
 {
   (void)body;
-  serve_htdocs(fd, "ndc-tty.js");
+  serve_htdocs(fd, "axil-tty.js");
   return 0;
 }
 
@@ -481,8 +481,8 @@ handle_tty(socket_t fd, char *body)
 {
   (void)body;
   char key[ENV_VALUE_LEN] = {0};
-  if (ndc_env_get(fd, key, "HTTP_SEC_WEBSOCKET_KEY") == 0) {
-    ndc_ws_upgrade(fd);
+  if (axil_env_get(fd, key, sizeof(key), "HTTP_SEC_WEBSOCKET_KEY") == 0) {
+    axil_ws_upgrade(fd);
     return 0;
   }
   serve_htdocs(fd, "index.html");
@@ -492,24 +492,24 @@ handle_tty(socket_t fd, char *body)
 /* Module entry points */
 
 void
-ndx_install(void)
+xy_install(void)
 {
-  /* Allocate qmap types and maps */
-  mux_state_type = qmap_reg(sizeof(struct mux_state));
-  mux_map     = qmap_open(NULL, NULL, QM_U32, mux_state_type, 0xFF, 0);
-  mux_pty_map = qmap_open(NULL, NULL, QM_U32, QM_U32,         0xFF, 0);
+  /* Allocate corm types and maps */
+  mux_state_type = corm_reg(sizeof(struct mux_state));
+  mux_map     = corm_open(NULL, NULL, CM_U32, mux_state_type, 0xFF, 0);
+  mux_pty_map = corm_open(NULL, NULL, CM_U32, CM_U32,         0xFF, 0);
 
   /* Cache server-user pw entry */
   char euname[BUFSIZ] = "root";
   strncpy(euname, getpwuid(geteuid())->pw_name, sizeof(euname) - 1);
-  ndc_pw_copy(&mux_pw, getpwnam(euname));
+  axil_tty_pw_copy(&mux_pw, getpwnam(euname));
 
   /* Register the shell command */
-  ndc_register("sh", do_sh, CF_NOTRIM);
+  axil_register("sh", do_sh, CF_NOTRIM);
 
   /* Serve browser terminal assets */
-  ndc_register_handler("GET:/ndc.js",     handle_ndc_js);
-  ndc_register_handler("GET:/ndc.css",    handle_ndc_css);
-  ndc_register_handler("GET:/ndc-tty.js", handle_ndc_tty_js);
-  ndc_register_handler("GET:/tty",        handle_tty);
+  axil_register_handler("GET:/axil.js",     handle_axil_js);
+  axil_register_handler("GET:/axil.css",    handle_axil_css);
+  axil_register_handler("GET:/axil-tty.js", handle_axil_tty_js);
+  axil_register_handler("GET:/tty",         handle_tty);
 }

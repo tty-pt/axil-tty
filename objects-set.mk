@@ -1,1 +1,1 @@
-CFLAGS-libndc-tty-o := -fPIC
+CFLAGS-libaxil-tty-o := -fPIC

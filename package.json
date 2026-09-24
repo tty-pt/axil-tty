@@ -1,23 +1,23 @@
 {
-  "name": "@tty-pt/ndc-tty",
-  "version": "1.0.0",
-  "description": "NDC PTY multiplexer module",
-  "main": "cjs/ndc.js",
-  "browser": "htdocs/ndc.js",
-  "module": "esm/ndc.js",
+  "name": "@tty-pt/libaxil-tty",
+  "version": "1.0.1",
+  "description": "AXIL PTY multiplexer module",
+  "main": "cjs/axil.js",
+  "browser": "htdocs/axil.js",
+  "module": "esm/axil.js",
   "entry": {
-    "main": "./ndc.js",
-    "ndc-tty": "./ndc-tty.js"
+    "main": "./axil.js",
+    "axil-tty": "./axil-tty.js"
   },
   "template": "index.html",
-  "library": "ttyNdc",
+  "library": "ttyAxil",
   "exports": {
     ".": {
-      "import": "./ndc.js",
-      "types": "./types/ndc.d.ts",
-      "default": "./cjs/ndc.js"
+      "import": "./axil.js",
+      "types": "./types/axil.d.ts",
+      "default": "./cjs/axil.js"
     },
-    "./ndc.css": "./htdocs/ndc.css"
+    "./axil.css": "./htdocs/axil.css"
   },
   "external": {
     "lodash": "global lodash",
@@ -29,7 +29,7 @@
     "doc": "docs"
   },
   "bin": {
-    "ndc": "./ndc-cli.js"
+    "axil": "./axil-cli.js"
   },
   "scripts": {
     "build": "scripts build",
@@ -37,12 +37,12 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/tty-pt/ndc-tty.git"
+    "url": "git+https://github.com/tty-pt/axil-tty.git"
   },
   "author": "quirinpa",
   "license": "BSD-2-Clause",
   "bugs": {
-    "url": "https://github.com/tty-pt/ndc-tty/issues"
+    "url": "https://github.com/tty-pt/axil-tty/issues"
   },
   "homepage": "https://tty.pt",
   "devDependencies": {
@@ -59,7 +59,7 @@
     "lodash": "^4.17.21"
   },
   "keywords": [
-    "ndc",
+    "axil",
     "terminal",
     "tty",
     "WebSocket",
@@ -73,13 +73,13 @@
     "art"
   ],
   "files": [
-    "ndc.css",
+    "axil.css",
     "htdocs",
     ".index",
     "cjs",
     "esm",
     "src/*.c",
-    "ndc.js",
+    "axil.js",
     "include",
     "Makefile"
   ]

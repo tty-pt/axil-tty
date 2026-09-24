@@ -9,8 +9,8 @@ jobs:
   build:
     uses: tty-pt/ci/.github/workflows/all-in-one.yml@main
     with:
-      name: ndc-tty
-      deps: "libndc,libndx"
+      name: axil-tty
+      deps: "axil,libxylem"
       publish_to: "deb,apk,rpm,brew,openbsd"
     secrets:
       HOST: ${{ secrets.OPENBSD_HOST }}

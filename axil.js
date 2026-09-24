@@ -1,7 +1,7 @@
 // import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
-import "./ndc.css";
+import "./axil.css";
 
 let term_max = 0;
 
@@ -194,5 +194,5 @@ function create(element, options = {}) {
   return sub;
 }
 
-window.ttyNdc = { create };
+window.ttyAxil = { create };
 export default { create };
