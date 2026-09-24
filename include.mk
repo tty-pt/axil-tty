@@ -1,4 +1,4 @@
-@tty-pt/libndc-tty-bin := ndc
-@tty-pt/libndc-tty-lib := ndc-tty.so
-npm-ndc := @tty-pt/libndc-tty
-npm-ndc-tty.so := @tty-pt/libndc-tty
+@tty-pt/libaxil-tty-bin := axil
+@tty-pt/libaxil-tty-lib := axil-tty.so
+npm-axil := @tty-pt/libaxil-tty
+npm-axil-tty.so := @tty-pt/libaxil-tty

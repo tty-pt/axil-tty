@@ -1,5 +1,7 @@
 *.o
+*.d
 *.so
+/man
 /htdocs
 /types
 /cjs
