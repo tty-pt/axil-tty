@@ -227,6 +227,43 @@ drop_priviledges(socket_t fd)
   return pw;
 }
 
+static int
+mux_ensure_pty(socket_t cfd, struct mux_state *s)
+{
+  if (s->pty > 0) {
+    axil_fd_unwatch(s->pty);
+    if (mux_pty_map)
+      corm_del(mux_pty_map, &(uint32_t){(uint32_t)s->pty});
+    close(s->pty);
+    s->pty = -1;
+  }
+
+  s->pty = posix_openpt(O_RDWR | O_NOCTTY);
+  if (s->pty == -1)
+    return -1;
+  if (grantpt(s->pty) || unlockpt(s->pty)) {
+    close(s->pty);
+    s->pty = -1;
+    return -1;
+  }
+
+  fcntl(s->pty, F_SETFL, O_NONBLOCK);
+
+  tcgetattr(s->pty, &s->tty);
+  s->tty.c_iflag |= ICRNL;
+  s->tty.c_iflag &= ~(IGNCR | INLCR);
+  s->tty.c_oflag |= OPOST | ONLCR;
+  s->tty.c_oflag &= ~OCRNL;
+  tcsetattr(s->pty, TCSANOW, &s->tty);
+
+  if (!mux_pty_map)
+    mux_init();
+  corm_put(mux_pty_map, &(uint32_t){(uint32_t)s->pty},
+      &(uint32_t){(uint32_t)cfd});
+  axil_fd_watch(s->pty);
+  return 0;
+}
+
 /* PTY fork */
 
 static inline int
@@ -236,13 +273,8 @@ command_pty(socket_t cfd, struct winsize *ws, char * const args[])
   CBUG(!s, "command_pty: no mux state for fd %d\n", cfd);
   WARN("command_pty: called for cfd=%d args[0]=%s\n", cfd, args[0] ? args[0] : "(null)");
 
-  axil_fd_watch(s->pty);
-
-  /* Mark the pty fd's reverse entry as "this is a pty master" (pid=-2) */
-  struct mux_state pty_sentinel = { .pty = -2, .pid = -2 };
-  corm_put(mux_pty_map, &(uint32_t){(uint32_t)s->pty},
-      &(uint32_t){(uint32_t)cfd});
-  (void)pty_sentinel; /* used above for documentation */
+  if (mux_ensure_pty(cfd, s) < 0)
+    return -1;
 
   pid_t p = fork();
   if (p == 0) { /* child */
@@ -489,8 +521,13 @@ XY_IMPL(int, on_axil_tick, socket_t, fd) {
     kill(s->pid, SIGKILL);
 
   s->pid = -1;
-  if (s->pty > 0)
+  if (s->pty > 0) {
     axil_fd_unwatch(s->pty);
+    if (mux_pty_map)
+      corm_del(mux_pty_map, &(uint32_t){(uint32_t)s->pty});
+    close(s->pty);
+    s->pty = -1;
+  }
   TELNET_CMD(cfd, IAC, WILL, TELOPT_ECHO);
   TELNET_CMD(cfd, IAC, WONT, TELOPT_SGA);
 exit:
