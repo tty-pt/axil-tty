@@ -73,15 +73,21 @@ static uint32_t mux_pty_map;
 
 static uint32_t mux_state_type;  /* corm type id for struct mux_state */
 
+static void mux_init(void);
+
 static struct mux_state *
 mux_get(socket_t fd)
 {
+  if (!mux_map)
+    return NULL;
   return (struct mux_state *)corm_get(mux_map, &(uint32_t){(uint32_t)fd});
 }
 
 static struct mux_state *
 mux_put(socket_t fd, struct mux_state *s)
 {
+  if (!mux_map)
+    mux_init();
   corm_put(mux_map, &(uint32_t){(uint32_t)fd}, s);
   return (struct mux_state *)corm_get(mux_map, &(uint32_t){(uint32_t)fd});
 }
@@ -89,6 +95,8 @@ mux_put(socket_t fd, struct mux_state *s)
 static void
 mux_del(socket_t fd)
 {
+  if (!mux_map)
+    return;
   corm_del(mux_map, &(uint32_t){(uint32_t)fd});
 }
 
@@ -430,6 +438,8 @@ XY_IMPL(int, on_axil_parse,
 }
 
 XY_IMPL(int, on_axil_tick, socket_t, fd) {
+  if (!mux_pty_map)
+    return 0;
   /* fd here is an externally-watched fd — look up the client fd */
   const uint32_t *cfd_p = corm_get(mux_pty_map, &(uint32_t){(uint32_t)fd});
 
@@ -490,16 +500,19 @@ exit:
 }
 
 XY_IMPL(int, on_axil_disconnect, socket_t, fd) {
+  if (!mux_map)
+    return 0;
   struct mux_state *s = mux_get(fd);
   if (!s)
     return 0;
 
   if (s->pty > 0) {
     if (s->pid > 0)
-      kill(-s->pid, SIGKILL);
+      kill(s->pid, SIGKILL);
     s->pid = -1;
     axil_fd_unwatch(s->pty);
-    corm_del(mux_pty_map, &(uint32_t){(uint32_t)s->pty});
+    if (mux_pty_map)
+      corm_del(mux_pty_map, &(uint32_t){(uint32_t)s->pty});
     close(s->pty);
     s->pty = -1;
   }
