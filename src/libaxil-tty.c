@@ -240,12 +240,11 @@ command_pty(socket_t cfd, struct winsize *ws, char * const args[])
   if (p == 0) { /* child */
     axil_fork_child_reset();
 
-    CBUG(setsid() == -1, "setsid\n");
-
-    CBUG(!(axil_flags(cfd) & DF_AUTHENTICATED), "NOT AUTHENTICATED\n");
+    (void)setsid();
 
     int slave_fd = open(ptsname(s->pty), O_RDWR);
-    CBUG(slave_fd == -1, "open %d\n", errno);
+    if (slave_fd == -1)
+      _exit(1);
 
     drop_priviledges(cfd);
     struct passwd local_pw;
@@ -253,18 +252,17 @@ command_pty(socket_t cfd, struct winsize *ws, char * const args[])
       local_pw = mux_pw;
     }
 
-    (void) fcntl(slave_fd, F_GETFL, 0);
-
     close(s->pty);
 
-    CBUG(ioctl(slave_fd, TIOCSCTTY, NULL) == -1, "ioctl TIOCSCTTY\n");
-    CBUG(ioctl(slave_fd, TIOCSWINSZ, ws)  == -1, "ioctl TIOCSWINSZ\n");
-    CBUG(fcntl(slave_fd, F_SETFD, FD_CLOEXEC) == -1,
-        "fcntl srv_fd F_SETFL FD_CLOEXEC\n");
+    (void)ioctl(slave_fd, TIOCSCTTY, 0);
+    if (ws && (ws->ws_row > 0 || ws->ws_col > 0))
+      (void)ioctl(slave_fd, TIOCSWINSZ, ws);
 
-    CBUG(dup2(slave_fd, STDIN_FILENO)  == -1, "dup2 STDIN\n");
-    CBUG(dup2(slave_fd, STDOUT_FILENO) == -1, "dup2 STDOUT\n");
-    CBUG(dup2(slave_fd, STDERR_FILENO) == -1, "dup2 STDERR\n");
+    dup2(slave_fd, STDIN_FILENO);
+    dup2(slave_fd, STDOUT_FILENO);
+    dup2(slave_fd, STDERR_FILENO);
+    if (slave_fd > 2)
+      close(slave_fd);
 
     const char *sh = (local_pw.pw_shell && *local_pw.pw_shell) ? local_pw.pw_shell : "/bin/sh";
     char *alt_args[] = { (char *)sh, NULL };
@@ -284,8 +282,8 @@ command_pty(socket_t cfd, struct winsize *ws, char * const args[])
     };
 
     execvpe(real_args[0], real_args, env);
-    execve(real_args[0], real_args, env);
-    CBUG(1, "execve\n");
+    execvp(real_args[0], real_args);
+    _exit(127);
   }
 
   return p;
