@@ -192,7 +192,7 @@ drop_priviledges(socket_t fd)
   struct passwd local_pw;
   struct passwd *pw;
 
-  if (axil_get_pw(fd, &local_pw) == 0) {
+  if (axil_get_pw(fd, &local_pw) == 0 && local_pw.pw_name && *local_pw.pw_name) {
     /* authenticated — use the connection user; pw_name etc. point into
        local_pw which is on the stack, but we only use it before execve */
     pw = &local_pw;
@@ -249,7 +249,7 @@ command_pty(socket_t cfd, struct winsize *ws, char * const args[])
 
     drop_priviledges(cfd);
     struct passwd local_pw;
-    if (axil_get_pw(cfd, &local_pw) != 0) {
+    if (axil_get_pw(cfd, &local_pw) != 0 || !local_pw.pw_shell || !*local_pw.pw_shell) {
       local_pw = mux_pw;
     }
 
@@ -266,12 +266,13 @@ command_pty(socket_t cfd, struct winsize *ws, char * const args[])
     CBUG(dup2(slave_fd, STDOUT_FILENO) == -1, "dup2 STDOUT\n");
     CBUG(dup2(slave_fd, STDERR_FILENO) == -1, "dup2 STDERR\n");
 
-    char *alt_args[] = { local_pw.pw_shell, NULL };
-    char * const *real_args = args[0] ? args : alt_args;
+    const char *sh = (local_pw.pw_shell && *local_pw.pw_shell) ? local_pw.pw_shell : "/bin/sh";
+    char *alt_args[] = { (char *)sh, NULL };
+    char * const *real_args = (args && args[0]) ? args : alt_args;
     char home[BUFSIZ], user[BUFSIZ], shell[BUFSIZ];
-    snprintf(home,  sizeof(home),  "HOME=%s",  local_pw.pw_dir);
-    snprintf(user,  sizeof(user),  "USER=%s",  local_pw.pw_name);
-    snprintf(shell, sizeof(shell), "SHELL=%s", local_pw.pw_shell);
+    snprintf(home,  sizeof(home),  "HOME=%s",  local_pw.pw_dir ? local_pw.pw_dir : "/tmp");
+    snprintf(user,  sizeof(user),  "USER=%s",  local_pw.pw_name ? local_pw.pw_name : "user");
+    snprintf(shell, sizeof(shell), "SHELL=%s", sh);
 
     char * const env[] = {
       "PATH=/bin:/usr/bin:/usr/local/bin",
@@ -304,7 +305,7 @@ XY_IMPL(int, axil_tty_exec,
 
 XY_IMPL(int, axil_tty_shell, socket_t, fd)
 {
-  char *argv[] = { NULL, NULL };
+  char *argv[] = { "/bin/sh", NULL };
   return axil_tty_exec(fd, argv);
 }
 
