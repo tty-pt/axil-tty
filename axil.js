@@ -190,9 +190,15 @@ function create(element, options = {}) {
 
   connect();
 
+  sub.term = term;
+  sub.send = send;
+  sub.write = write;
+  sub.resize = resize;
+  sub.ws = ws;
 
   return sub;
 }
 
 window.ttyAxil = { create };
 export default { create };
+export { create };

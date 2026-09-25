@@ -20,4 +20,7 @@ XY_DECL(int, axil_tty_exec, socket_t, fd, char **, argv);
 /** Open a PTY shell (login shell) on fd. */
 XY_DECL(int, axil_tty_shell, socket_t, fd);
 
+/** Check if a PTY child process is active on fd. Returns 1 if active, 0 otherwise. */
+XY_DECL(int, axil_tty_active, socket_t, fd);
+
 #endif

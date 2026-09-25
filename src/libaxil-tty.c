@@ -116,6 +116,58 @@ axil_tty_pw_copy(struct passwd *target, struct passwd *origin)
 }
 
 static void
+mux_init(void)
+{
+  if (mux_map)
+    return;
+  mux_state_type = corm_reg(sizeof(struct mux_state));
+  mux_map     = corm_open(NULL, NULL, CM_U32, mux_state_type, 0xFF, 0);
+  mux_pty_map = corm_open(NULL, NULL, CM_U32, CM_U32,         0xFF, 0);
+
+  if (!mux_pw.pw_name) {
+    char euname[BUFSIZ] = "root";
+    struct passwd *pw = getpwuid(geteuid());
+    if (pw)
+      strncpy(euname, pw->pw_name, sizeof(euname) - 1);
+    axil_tty_pw_copy(&mux_pw, getpwnam(euname));
+  }
+}
+
+static struct mux_state *
+mux_ensure(socket_t fd)
+{
+  mux_init();
+  struct mux_state *s = mux_get(fd);
+  if (s && s->pty >= 0)
+    return s;
+
+  struct mux_state new_s;
+  if (s) {
+    memcpy(&new_s, s, sizeof(new_s));
+  } else {
+    memset(&new_s, 0, sizeof(new_s));
+    new_s.pty = -1;
+    new_s.pid = -1;
+  }
+
+  if (new_s.pty < 0) {
+    new_s.pty = posix_openpt(O_RDWR | O_NOCTTY);
+    if (new_s.pty == -1)
+      return NULL;
+    if (grantpt(new_s.pty) != 0 || unlockpt(new_s.pty) != 0) {
+      close(new_s.pty);
+      return NULL;
+    }
+    tcgetattr(new_s.pty, &new_s.tty);
+    new_s.tty.c_iflag |= ICRNL;
+    new_s.tty.c_iflag &= ~(IGNCR | INLCR);
+    tcsetattr(new_s.pty, TCSANOW, &new_s.tty);
+  }
+
+  return mux_put(fd, &new_s);
+}
+
+static void
 axil_tty_update(socket_t fd)
 {
   struct mux_state *s = mux_get(fd);
@@ -174,6 +226,7 @@ command_pty(socket_t cfd, struct winsize *ws, char * const args[])
 {
   struct mux_state *s = mux_get(cfd);
   CBUG(!s, "command_pty: no mux state for fd %d\n", cfd);
+  WARN("command_pty: called for cfd=%d args[0]=%s\n", cfd, args[0] ? args[0] : "(null)");
 
   axil_fd_watch(s->pty);
 
@@ -229,6 +282,7 @@ command_pty(socket_t cfd, struct winsize *ws, char * const args[])
       NULL,
     };
 
+    execvpe(real_args[0], real_args, env);
     execve(real_args[0], real_args, env);
     CBUG(1, "execve\n");
   }
@@ -240,7 +294,7 @@ XY_IMPL(int, axil_tty_exec,
     socket_t, fd,
     char **, argv)
 {
-  struct mux_state *s = mux_get(fd);
+  struct mux_state *s = mux_ensure(fd);
   if (!s)
     return -1;
   s->pid = command_pty(fd, &s->wsz, (char * const *)argv);
@@ -252,6 +306,12 @@ XY_IMPL(int, axil_tty_shell, socket_t, fd)
 {
   char *argv[] = { NULL, NULL };
   return axil_tty_exec(fd, argv);
+}
+
+XY_IMPL(int, axil_tty_active, socket_t, fd)
+{
+  struct mux_state *s = mux_get(fd);
+  return (s && s->pid > 0) ? 1 : 0;
 }
 
 static void
@@ -400,8 +460,13 @@ XY_IMPL(int, on_axil_tick, socket_t, fd) {
         return 0;
       break;
     case -1:
-      if (errno == EAGAIN || errno == EIO)
+      if (errno == EAGAIN)
         return 0;
+      if (errno == EIO) {
+        if (s->pid > 0 && waitpid(s->pid, &status, WNOHANG) == 0)
+          return 0;
+        break;
+      }
       axil_clear_active(fd);
       return -1;
     default:
@@ -415,6 +480,10 @@ XY_IMPL(int, on_axil_tick, socket_t, fd) {
     kill(s->pid, SIGKILL);
 
   s->pid = -1;
+  if (s->pty > 0)
+    axil_fd_unwatch(s->pty);
+  TELNET_CMD(cfd, IAC, WILL, TELOPT_ECHO);
+  TELNET_CMD(cfd, IAC, WONT, TELOPT_SGA);
 exit:
   if (ret < 0)
     axil_clear_active(fd);
@@ -495,14 +564,7 @@ void
 xy_install(void)
 {
   /* Allocate corm types and maps */
-  mux_state_type = corm_reg(sizeof(struct mux_state));
-  mux_map     = corm_open(NULL, NULL, CM_U32, mux_state_type, 0xFF, 0);
-  mux_pty_map = corm_open(NULL, NULL, CM_U32, CM_U32,         0xFF, 0);
-
-  /* Cache server-user pw entry */
-  char euname[BUFSIZ] = "root";
-  strncpy(euname, getpwuid(geteuid())->pw_name, sizeof(euname) - 1);
-  axil_tty_pw_copy(&mux_pw, getpwnam(euname));
+  mux_init();
 
   /* Register the shell command */
   axil_register("sh", do_sh, CF_NOTRIM);
