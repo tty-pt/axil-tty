@@ -1,23 +1,24 @@
 {
   "name": "@tty-pt/libaxil-tty",
-  "version": "1.0.1",
+  "version": "1.2.0",
   "description": "AXIL PTY multiplexer module",
-  "main": "cjs/axil.js",
-  "browser": "htdocs/axil.js",
-  "module": "esm/axil.js",
+  "main": "cjs/axil-tty.js",
+  "browser": "htdocs/axil-tty.js",
+  "types": "types/axil-tty.d.ts",
+  "module": "esm/axil-tty.js",
   "entry": {
-    "main": "./axil.js",
-    "axil-tty": "./axil-tty.js"
+    "main": "./axil-tty.js",
+    "demo": "./demo.js"
   },
   "template": "index.html",
   "library": "ttyAxil",
   "exports": {
     ".": {
-      "import": "./axil.js",
-      "types": "./types/axil.d.ts",
-      "default": "./cjs/axil.js"
+      "types": "./types/axil-tty.d.ts",
+      "import": "./axil-tty.js",
+      "default": "./cjs/axil-tty.js"
     },
-    "./axil.css": "./htdocs/axil.css"
+    "./axil-tty.css": "./htdocs/axil-tty.css"
   },
   "external": {
     "lodash": "global lodash",
@@ -29,7 +30,7 @@
     "doc": "docs"
   },
   "bin": {
-    "axil": "./axil-cli.js"
+    "axil": "./axil-tty-cli.js"
   },
   "scripts": {
     "build": "scripts build",
@@ -73,13 +74,15 @@
     "art"
   ],
   "files": [
-    "axil.css",
+    "axil-tty.css",
     "htdocs",
     ".index",
     "cjs",
     "esm",
     "src/*.c",
-    "axil.js",
+    "axil-tty.js",
+    "axil-tty-cli.js",
+    "types",
     "include",
     "Makefile"
   ]

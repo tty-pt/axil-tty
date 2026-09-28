@@ -1,9 +1,11 @@
 *.o
 *.d
 *.so
+*.corm
 /man
 /htdocs
 /types
 /cjs
 /esm
 /node_modules
+/bun.lock
