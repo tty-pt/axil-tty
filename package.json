@@ -1,5 +1,5 @@
 {
-  "name": "@tty-pt/libaxil-tty",
+  "name": "@tty-pt/axil-tty",
   "version": "1.2.0",
   "description": "AXIL PTY multiplexer module",
   "main": "cjs/axil-tty.js",
@@ -54,9 +54,9 @@
     "lodash": "^4.17.21"
   },
   "peerDependencies": {
-    "@xterm/addon-fit": "^0.10.0",
-    "@xterm/addon-web-links": "^0.11.0",
-    "@xterm/xterm": "^5.5.0",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/addon-web-links": "^0.12.0",
+    "@xterm/xterm": "^6.0.0",
     "lodash": "^4.17.21"
   },
   "keywords": [
