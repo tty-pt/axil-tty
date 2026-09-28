@@ -174,6 +174,31 @@ mux_init(void)
   }
 }
 
+/* The line-discipline policy every PTY we create starts from, and the single
+ * place that states it: the three creation sites used to each repeat a
+ * different subset of these flags, and mux_ensure() never touched c_oflag at
+ * all, so a guest reached that way got bare LFs.
+ *
+ * ECHO is deliberately left at the OS default (on), because the line discipline
+ * is this session's only echo owner. That is what a real terminal is: the
+ * driver echoes a byte as it arrives, which is why typing feels instant, while
+ * the line itself stays buffered in the kernel until Enter. The client is
+ * therefore told IAC WILL ECHO -- "I will echo, you will not" -- and stays a
+ * pipe. It also has to stay that way for the whole session, so nothing here
+ * clears ECHO and no code renegotiates it later: readline only echoes at all
+ * when it inherits ECHO on, and a program that clears ECHO (vim) is about to
+ * render the line itself. Two echoers is the one outcome nobody can recover
+ * from, so there is never a second one. */
+static void
+mux_pty_termios(socket_t pty, struct termios *t)
+{
+  tcgetattr(pty, t);
+  t->c_iflag |= ICRNL;
+  t->c_iflag &= ~(IGNCR | INLCR);
+  t->c_oflag |= OPOST | ONLCR;
+  t->c_oflag &= ~OCRNL;
+}
+
 static struct mux_state *
 mux_ensure(socket_t fd)
 {
@@ -199,30 +224,11 @@ mux_ensure(socket_t fd)
       close(new_s.pty);
       return NULL;
     }
-    tcgetattr(new_s.pty, &new_s.tty);
-    new_s.tty.c_iflag |= ICRNL;
-    new_s.tty.c_iflag &= ~(IGNCR | INLCR);
+    mux_pty_termios(new_s.pty, &new_s.tty);
     tcsetattr(new_s.pty, TCSANOW, &new_s.tty);
   }
 
   return mux_put(fd, &new_s);
-}
-
-static void
-axil_tty_update(socket_t fd)
-{
-  struct mux_state *s = mux_get(fd);
-  if (!s || s->pty < 0)
-    return;
-
-  struct termios last = s->tty;
-  tcgetattr(s->pty, &s->tty);
-
-  if ((last.c_lflag & ECHO) != (s->tty.c_lflag & ECHO))
-    TELNET_CMD(fd, IAC, s->tty.c_lflag & ECHO ? WILL : WONT, TELOPT_ECHO);
-
-  if ((last.c_lflag & ICANON) != (s->tty.c_lflag & ICANON))
-    TELNET_CMD(fd, IAC, s->tty.c_lflag & ICANON ? WONT : WILL, TELOPT_SGA);
 }
 
 static struct passwd *
@@ -282,11 +288,7 @@ mux_ensure_pty(socket_t cfd, struct mux_state *s)
 
   fcntl(s->pty, F_SETFL, O_NONBLOCK);
 
-  tcgetattr(s->pty, &s->tty);
-  s->tty.c_iflag |= ICRNL;
-  s->tty.c_iflag &= ~(IGNCR | INLCR);
-  s->tty.c_oflag |= OPOST | ONLCR;
-  s->tty.c_oflag &= ~OCRNL;
+  mux_pty_termios(s->pty, &s->tty);
   tcsetattr(s->pty, TCSANOW, &s->tty);
 
   if (!mux_pty_map)
@@ -438,7 +440,10 @@ XY_IMPL(int, on_axil_connect, socket_t, fd)
   s.pty = -1;
   s.pid = -1;
 
-  /* Send initial TELNET negotiations */
+  /* Send initial TELNET negotiations. WILL ECHO, and only ever once: the PTY
+   * below keeps the line discipline's own ECHO, so this is the truth, and it is
+   * the contract the client codes against -- it stays a pipe and lets the
+   * driver echo each keystroke as it arrives. */
   TELNET_CMD(fd, IAC, WILL, TELOPT_ECHO);
   TELNET_CMD(fd, IAC, WONT, TELOPT_SGA);
   TELNET_CMD(fd, IAC, DO, TELOPT_NAWS);
@@ -451,12 +456,9 @@ XY_IMPL(int, on_axil_connect, socket_t, fd)
   CBUG(grantpt(s.pty),  "telnet_connected grantpt\n");
   CBUG(unlockpt(s.pty), "telnet_connected unlockpt\n");
 
-  /* Start from OS defaults, then adjust only CR/LF translation */
-  tcgetattr(s.pty, &s.tty);
-  s.tty.c_iflag |= ICRNL;
-  s.tty.c_iflag &= ~(IGNCR | INLCR);
-  s.tty.c_oflag |= OPOST | ONLCR;
-  s.tty.c_oflag &= ~OCRNL;
+  /* Start from the OS defaults, then apply our one policy. mux_pty_termios()
+   * leaves ECHO off, which is what the WONT ECHO above told the client. */
+  mux_pty_termios(s.pty, &s.tty);
 
   struct mux_state *sp = mux_put(fd, &s);
 
@@ -470,7 +472,6 @@ XY_IMPL(int, on_axil_connect, socket_t, fd)
       &(uint32_t){(uint32_t)fd});
 
   tcsetattr(sp->pty, TCSANOW, &sp->tty);
-  axil_tty_update(fd);
 
   if (sp->wsz.ws_col || sp->wsz.ws_row)
     ioctl(sp->pty, TIOCSWINSZ, &sp->wsz);
@@ -623,11 +624,10 @@ XY_IMPL(int, on_axil_tick, socket_t, fd) {
       }
       axil_clear_active(fd);
       return -1;
-    default:
-      buf[ret] = '\0';
-      axil_write(cfd, buf, ret);
-      axil_tty_update(cfd);
-      goto exit;
+  default:
+    buf[ret] = '\0';
+    axil_write(cfd, buf, ret);
+    goto exit;
   }
 
   if (s->pid > 0)
@@ -641,6 +641,10 @@ XY_IMPL(int, on_axil_tick, socket_t, fd) {
     close(s->pty);
     s->pty = -1;
   }
+  /* The child is gone, so the socket is a bare line again. Re-assert the same
+   * WILL ECHO as on connect, not a new policy: the PTY never stopped echoing,
+   * and a client that had been told WONT ECHO by a program which has now exited
+   * needs telling that the driver is the echo owner again. */
   TELNET_CMD(cfd, IAC, WILL, TELOPT_ECHO);
   TELNET_CMD(cfd, IAC, WONT, TELOPT_SGA);
 exit:

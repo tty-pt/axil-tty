@@ -49,6 +49,8 @@ function create(element, options = {}) {
   const decoder = new TextDecoder('utf-8');
   let connected = false;
 
+  /* The server echoes for us (WILL ECHO), so assume it from the first
+   * keystroke rather than echoing locally until the negotiation frame lands. */
   let will_echo = true;
   let raw = false;
 
@@ -126,7 +128,6 @@ function create(element, options = {}) {
     term.loadAddon(fitAddon);
     term.loadAddon(new WebLinksAddon());
     term.open(parent);
-    term.inputBuf = "";
     term.perm = "";
   
     term.onResize(({ cols, rows }) => resize(cols, rows));
@@ -142,29 +143,19 @@ function create(element, options = {}) {
     term.onData(data => {
       if (options.debug)
         console.log("term.onData", data, data.charAt(0), raw, will_echo);
-      if (raw)
-        send(data);
-      else if (data === "\r" || data === "\n") {
-        if (!will_echo)
-          term.write("\b \b".repeat(term.inputBuf.length));
-        else
-          term.write("\n");
-        ws.send(term.inputBuf + "\r\n");
-        term.inputBuf = "";
-      } else if (data === "\u007f") {
-        if (raw)
-          send(data);
-        else {
-          term.write("\b \b");
-          term.inputBuf = term.inputBuf.length > 0 ? term.inputBuf.slice(0, term.inputBuf.length - 1) : "";
-        }
-      } else {
-        term.inputBuf += data;
-        if (!will_echo)
-          term.write(data);
-        return;
-      }
-      term.lastInput = false;
+      // The client is a pipe. The server negotiates WILL ECHO once, at connect,
+      // and the PTY's line discipline does the echoing, line editing and CR/LF
+      // translation -- so every keystroke goes out the moment it is typed and
+      // the driver echoes it straight back. This is the whole trick: a driver
+      // with ECHO on echoes each byte as it arrives while still holding the
+      // line until Enter, which is what makes a terminal feel like a terminal.
+      //
+      // The 1.2.0 client instead buffered the line here and echoed it locally
+      // when the server said WONT ECHO, so it withheld the bytes until Enter
+      // and the driver had nothing to echo in the meantime: nothing appeared
+      // until the line was submitted. Buffering and echoing are both the
+      // driver's job, so do neither.
+      ws.send(data);
     });
     return term;
   }

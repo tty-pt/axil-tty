@@ -32,7 +32,10 @@ A dynamic module for [axil](https://github.com/tty-pt/axil) that adds:
 - **WebSocket↔PTY bridging** — browser terminal sessions wired to a PTY on
   the server.
 - **Telnet negotiation** — NAWS window resize, ECHO, and SGA for a proper
-  terminal experience.
+  terminal experience. `WILL ECHO` is negotiated once per session, and every PTY
+  keeps the line discipline's own `ECHO`, so the client stays a pipe: the driver
+  echoes each keystroke as it is typed, owns line editing and `^?` erase, and
+  turns the guest's `\n` into the `\r\n` a terminal needs.
 - **Login-shell handler** — the first NAWS on a connection spawns a login shell
   over the WebSocket, via `axil_tty_shell`/`axil_tty_exec`. An `sh` command is
   also registered, but see the caveat below: over a WebSocket axil never runs
@@ -200,8 +203,19 @@ After `axil_ws_upgrade` succeeds, `axil_connect()` fires — axil-tty's
 
 The suite boots axil with the module on a random port and verifies the
 WebSocket handshake (computed `Sec-WebSocket-Accept`), the telnet IAC
-negotiation (`DO NAWS`, `WILL ECHO`, `WONT SGA`), and that PTY output
-(`echo AXIL_TEST`) streams back over the socket.
+negotiation (`DO NAWS`, `WILL ECHO`, `WONT SGA`), that a **partial** line comes
+back echoed before Enter — the line discipline echoing each keystroke as it
+arrives, which is the whole feature — that PTY output (`echo AXIL_TEST`) streams
+back over the socket CRLF-terminated, and that the browser assets are served.
+
+`make` builds the C module only; the bundle the browser loads is `bun run build`.
+Neither installs — `sudo make install` is what puts the module and `htdocs/` under
+`$(PREFIX)`, and `axil -m axil-tty` loads *that* copy, so a rebuilt bundle is not
+what you are testing until it is installed. For a loop that needs no `sudo`:
+
+```sh
+bun run build && AXIL_HTDOCS=./htdocs axil -d -A -p 8080 -m ./lib/axil-tty
+```
 
 ## Documentation
 

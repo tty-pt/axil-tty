@@ -72,8 +72,15 @@ wait $cat_pid 2>/dev/null || true
 
 hex=$(xxd -p "$tmpout" | tr -d '\n')
 echo "$hex" | grep -qiF "fffd1f" || { echo "FAIL: IAC DO NAWS missing"   >&2; exit 1; }
+# WILL ECHO, not WONT: the PTY keeps the line discipline's own ECHO, so this is
+# the truth, and it is what makes the client a plain pipe. The client that used
+# to withhold the line until Enter could never see this work, which is the bug.
 echo "$hex" | grep -qiF "fffb01" || { echo "FAIL: IAC WILL ECHO missing" >&2; exit 1; }
 echo "$hex" | grep -qiF "fffc03" || { echo "FAIL: IAC WONT SGA missing"  >&2; exit 1; }
+echo "$hex" | grep -qiF "fffc01" \
+	&& { echo "FAIL: IAC WONT ECHO present, client would echo a second time" >&2; exit 1; }
+echo "$hex" | grep -qiF "fffb03" \
+	&& { echo "FAIL: IAC WILL SGA present, PTY is canonical" >&2; exit 1; }
 
 # Spawn the shell the way the browser client does. This module ignores shell
 # commands sent over the socket: axil never routes WebSocket frames through
@@ -91,6 +98,38 @@ printf '\x82\x89\x00\x00\x00\x00\xff\xfa\x1f\x00\x50\x00\x18\xff\xf0' >&3
 
 # Let the login shell fork and initialise before writing to it.
 sleep 0.5
+
+# Regression probe for the echo policy, and the user-visible feature itself: a
+# keystroke has to show up as it is typed. A canonical line discipline with ECHO
+# on echoes every byte the moment it arrives while still holding the line until
+# Enter, so a partial line must come straight back. The 1.2.0 client buffered
+# the line and never sent it until Enter, so the driver had nothing to echo and
+# the screen stayed blank -- which is exactly what this catches.
+#
+# A partial line is the right probe precisely because it never reaches the
+# shell: whatever comes back can only be the line discipline echoing.
+#
+# 15 payload bytes, so the length byte is 0x80|15 = 0x8f.
+: >"$tmpout"
+cat <&3 >"$tmpout" &
+cat_pid=$!
+printf '\x82\x8f\x00\x00\x00\x00AXIL_ECHO_PROBE' >&3
+tries=20
+while [ $tries -gt 0 ]; do
+	grep -qa "AXIL_ECHO_PROBE" "$tmpout" && break
+	sleep 0.05
+	tries=$((tries - 1))
+done
+kill $cat_pid 2>/dev/null || true
+wait $cat_pid 2>/dev/null || true
+
+grep -qa "AXIL_ECHO_PROBE" "$tmpout" \
+	|| { echo "FAIL: partial line not echoed, keystrokes are invisible until Enter" >&2; exit 1; }
+
+# Erase it so the shell's buffer is empty again before the real command
+# (1 payload byte, 0x80|1 = 0x81).
+printf '\x82\x81\x00\x00\x00\x00\177' >&3
+sleep 0.3
 
 printf '\x82\x8f\x00\x00\x00\x00echo AXIL_TEST\n' >&3
 
@@ -112,6 +151,13 @@ wait $cat_pid 2>/dev/null || true
 hex2=$(xxd -p "$tmpout" | tr -d '\n')
 echo "$hex2" | grep -qiF "$axil_test_hex" \
 	|| { echo "FAIL: PTY output AXIL_TEST not seen" >&2; exit 1; }
+
+# The guest's newline has to reach the client as CR LF. The PTY's OPOST|ONLCR
+# (mux_pty_termios) is what does that translation, and without it the browser
+# terminal receives a bare LF and steps down a line without returning to
+# column 0 -- a staircase. Assert the exact bytes, not just the text.
+echo "$hex2" | grep -qiF "${axil_test_hex}0d0a" \
+	|| { echo "FAIL: PTY output AXIL_TEST is not CRLF-terminated" >&2; exit 1; }
 
 echo "ws-mux ok"
 
