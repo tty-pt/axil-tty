@@ -1,5 +1,27 @@
 ## Unreleased
 
+- **Reverted `b0485b0`'s second hunk: `sh` spawns the login shell again.**
+  That commit meant to harden the empty-passwd fallback but changed
+  `axil_tty_shell` from `{NULL, NULL}` to `{"/bin/sh", NULL}`, which bypasses
+  `command_pty()`'s whole `pw_shell → mux_pw → /bin/sh` chain — every `sh`
+  landed in dash, a canonical-mode reader with no line editing, where arrow
+  keys arrived as raw escape bytes (cursor jumps plus garbage in the buffer,
+  since `ECHOCTL` stays off). Passing NULL restores the login shell
+  (`/bin/bash` here, readline, working history) while keeping the first
+  hunk's empty-field hardening intact.
+
+- **Opt-in line mode for routes with no line discipline (`lineMode`).** A game
+  socket says `WONT ECHO` and runs no PTY, so per-keystroke frames used to hit
+  the game command parser one character at a time (and a bare Return died in
+  `cmd_new`). With `lineMode: true`, the client holds the line while the server
+  says `WONT ECHO` and submits one `"<line>\n"` frame per Enter -- the same
+  shape `sendCmd()` uses -- with local echo, code-point-aware erase, pasted
+  CRLF split into one submit per line, and escape-led input swallowed. The
+  moment the server says `WILL ECHO` (a PTY is born: `sh`, `man`, `/tty`) the
+  branch goes inert and every keystroke reaches the driver immediately, so
+  there is still exactly one echoer in both states. Off by default; `/tty`
+  behaviour is unchanged.
+
 - **Fixed: nothing was echoed as you typed.** 1.2.0 (`66631d2`, "axil-nd
   compat") rewrote the browser client to impersonate a line discipline: buffer
   every keystroke into `term.inputBuf`, send the line only at Enter, and echo

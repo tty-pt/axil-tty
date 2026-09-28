@@ -12,6 +12,11 @@ function create(element, options = {}) {
     proto = location.protocol === "https:" ? "wss" : "ws",
     port = window.location.port, 
     url = proto + "://" + window.location.hostname + ":" + port + '/tty',
+    /* Opt-in line mode for routes with no line discipline (a game, not a
+     * PTY): buffer keystrokes and submit one "<line>\n" frame per Enter
+     * instead of one frame per keystroke. Off by default, and inert whenever
+     * the server says WILL ECHO, so /tty and /nd-with-a-shell stay pipes. */
+    lineMode = false,
   } = options;
 
   const hookDefaults = {
@@ -49,10 +54,24 @@ function create(element, options = {}) {
   const decoder = new TextDecoder('utf-8');
   let connected = false;
 
-  /* The server echoes for us (WILL ECHO), so assume it from the first
-   * keystroke rather than echoing locally until the negotiation frame lands. */
+  /* Who is echoing. Starts true because the first thing a PTY-backed server says
+   * is WILL ECHO, and guessing "the client echoes" until that frame lands would
+   * double-echo the first few keystrokes. Every WONT ECHO flips it back. */
   let will_echo = true;
   let raw = false;
+
+  /* What this client has echoed locally, so erase can take a character back.
+   * Only meaningful while will_echo is false; it is dropped the moment the
+   * server takes over, because past that point the line discipline owns the
+   * line and there is nothing here left to correct. */
+  let local_line = "";
+
+  /* Pending line for opt-in lineMode. Kept beside local_line (which tracks
+   * painted cells for erase): line_buf is what gets submitted on Enter, and
+   * both are dropped on any echo-owner change so a stale game line can never
+   * leak into a PTY session or vice versa. */
+  let line_buf = "";
+  const LINE_MAX = 1024;
 
   function onMessage(ev) {
     const arr = new Uint8Array(ev.data);
@@ -67,6 +86,11 @@ function create(element, options = {}) {
       switch (arr[2]) {
         case 1: // TELOPT_ECHO
           will_echo = false;
+          /* Whatever we painted ourselves is now the server's business, and a
+           * half-typed line in the terminal no longer matches the one the driver
+           * is holding. Start over rather than try to reconcile them. */
+          local_line = "";
+          line_buf = "";
           if (options.debug)
             console.log("WONT ECHO");
           break;
@@ -80,6 +104,8 @@ function create(element, options = {}) {
       switch (arr[2]) {
         case 1: // TELOPT_ECHO
           will_echo = true;
+          local_line = "";
+          line_buf = "";
           if (options.debug)
             console.log("WILL ECHO");
           break;
@@ -155,7 +181,68 @@ function create(element, options = {}) {
       // and the driver had nothing to echo in the meantime: nothing appeared
       // until the line was submitted. Buffering and echoing are both the
       // driver's job, so do neither.
+      //
+      // ...unless the server says WONT ECHO, which means there is no driver on
+      // this socket at all: the module that owns it runs a game, and a game does
+      // not echo its input line. Then the client is the only echoer there is, so
+      // it echoes -- per keystroke, which is the part 1.2.0 got wrong, and not
+      // buffered until Enter. This branch used to be unreachable: will_echo was
+      // tracked and then never read, so a guest typing a game command saw
+      // nothing at all until Enter produced a new view.
+      // Line mode (opt-in, game routes only): while the server says WONT
+      // ECHO there is no driver to hold a line, so hold it here and submit
+      // one "<line>\n" frame per Enter -- the same frame shape sendCmd()
+      // uses, which is the only shape the game command parser understands.
+      // Inert the moment the server says WILL ECHO (a PTY is born: sh, man,
+      // /tty), where every keystroke must reach the driver immediately.
+      if (lineMode && !will_echo) {
+        // Escape-led input (arrows, Alt combos, pasted ANSI) has no meaning
+        // to a line buffer; swallowing it whole keeps partial sequences out
+        // of both the buffer and the painted line. Movement stays on the
+        // buttons and unfocused hotkeys.
+        if (!data.includes("\x1b")) {
+          // Collapse CRLF first so one Enter is one submit, not two.
+          for (const ch of data.replace(/\r\n/g, "\n")) {
+            if (ch === "\r" || ch === "\n") {
+              ws.send(line_buf + "\n");
+              write("\r\n");
+              line_buf = "";
+            } else if (ch === "\x7f" || ch === "\b") {
+              if (Array.from(line_buf).length) {
+                line_buf = Array.from(line_buf).slice(0, -1).join("");
+                write("\b \b");
+              }
+            } else if (ch === " " || (ch > " " && ch < "\x7f") || ch > "\x9f") {
+              // Printable only, C1 controls excluded: painting them would
+              // fight the view the game sends back.
+              if (Array.from(line_buf).length < LINE_MAX) {
+                line_buf += ch;
+                write(ch);
+              }
+            }
+          }
+        }
+        return;
+      }
       ws.send(data);
+
+      if (!will_echo) {
+        for (const ch of data) {
+          if (ch === "\x7f" || ch === "\b") {
+            // Backspace. The driver's own echo of this is BS SP BS, and so is
+            // ours, so the cursor lands in the same place either way.
+            if (local_line.length) {
+              local_line = local_line.slice(0, -1);
+              write("\b \b");
+            }
+          } else if (ch >= " ") {
+            // Printable only. Control keys are the server's to interpret, and
+            // painting a CR here would fight the view it sends back.
+            local_line += ch;
+            write(ch);
+          }
+        }
+      }
     });
     return term;
   }
