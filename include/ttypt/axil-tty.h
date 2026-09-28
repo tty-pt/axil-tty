@@ -31,21 +31,37 @@ XY_DECL(int, axil_tty_active, socket_t, fd);
 /** Check if this module owns the WebSocket on fd, i.e. the client connected to
  *  our own `GET:/tty` route. Returns 1 if owned, 0 otherwise.
  *
- *  axil never routes WebSocket frames through on_axil_parse, so a module that
- *  wants the bytes must call axil_fd_watch() and read them with axil_ws_read()
- *  from its on_axil_tick. When we own the connection we do that ourselves, so a
- *  host module that also borrows this bridge (axil-nd) must skip its own read
- *  for such fds -- otherwise the two ticks split the frame stream. */
+ *  Ownership here means the route, not the reading. axil decodes WebSocket
+ *  frames and delivers each payload to on_axil_parse, which is
+ *  axil_tty_input() -- for our own route and for a borrowed socket alike. No
+ *  module needs axil_fd_watch() to receive client bytes, and a module that
+ *  claims a client socket with axil_fd_watch() stops receiving them: the flag
+ *  takes the descriptor out of descr_read() and gives it to axil_fd_tick()
+ *  instead. */
 XY_DECL(int, axil_tty_owns, socket_t, fd);
+
+/** Negotiate terminal options on a client socket this module does not own.
+ *
+ *  Creates the per-connection state if absent and sends the same negotiation
+ *  our own route sends on connect: `WILL ECHO` (once per socket, guarded so a
+ *  later axil_tty_exec()/command_pty() is not a second statement of the same
+ *  policy), `WONT SGA`, and `DO NAWS`. Returns 0, or -1 if the state could not
+ *  be created.
+ *
+ *  No PTY is opened and no descriptor is claimed -- this is negotiation only.
+ *  Use it from on_axil_connect() so a socket shared with a host module (axil-nd
+ *  runs its game and its shell on one /nd socket) gets a real terminal
+ *  negotiation and a window size, instead of the host reimplementing the
+ *  telnet options. The PTY, and the `WILL ECHO` that belongs to it, still come
+ *  from axil_tty_shell()/axil_tty_exec(). */
+XY_DECL(int, axil_tty_attach, socket_t, fd);
 
 /** Feed client input to the PTY bridge on fd, consuming any telnet options.
  *
  *  Consumes IAC sequences (NAWS updates the window size and may auto-spawn the
  *  shell, DO/DONT/WILL are dropped) and writes whatever follows to the PTY.
  *  This is the body of the on_axil_parse hook, exported for callers that
- *  receive client bytes by some other route -- notably a module's
- *  axil_fd_tick(), since axil no longer routes WebSocket frames through
- *  on_axil_parse.
+ *  receive client bytes by some other route.
  *
  *  Returns -1 when a PTY child consumed the input (caller must not also treat
  *  it as a command), otherwise the number of leading bytes consumed as telnet

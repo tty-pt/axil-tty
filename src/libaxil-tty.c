@@ -65,14 +65,43 @@ int initgroups(const char *, gid_t);
 /* Per-connection PTY state stored in the module corm maps             */
 /* ------------------------------------------------------------------ */
 
+/* Who is echoing on a socket right now. ECHO is not a property of the route or
+ * of the connection, it is a property of whether a PTY exists, and the client
+ * has to be told which or it either double-echoes or goes silent. These are the
+ * only two legal states; ECHO_UNDECLARED is "we have not said anything yet". */
+#define ECHO_UNDECLARED (-1)
+#define ECHO_CLIENT     0  /* WONT ECHO: the client echoes for itself */
+#define ECHO_PTY        1  /* WILL ECHO: the line discipline echoes */
+
 struct mux_state {
   int            pty;        /* PTY master fd; -1 = none */
   int            pid;        /* child PID; -1 = none */
   int            auto_shell; /* spawn shell on first NAWS */
   int            owns_client;/* client connected to our GET:/tty route */
+  int            echo_owner; /* ECHO_UNDECLARED / ECHO_CLIENT / ECHO_PTY */
   struct winsize wsz;
   struct termios tty;
 };
+
+/* State who owns echoing on this socket, and only actually send an option when
+ * the owner changes. ECHO_UNDECLARED is what makes the first statement go out
+ * even when the owner is already ECHO_CLIENT: a socket with no PTY has to be
+ * told WONT ECHO just as much as one with a PTY has to be told WILL ECHO, or the
+ * guest types into nothing.
+ *
+ * This replaces a one-way `echo_sent` latch that could only ever mean "have we
+ * said WILL ECHO", which cannot express the two things that actually happen on a
+ * socket another module owns: there is no PTY until a command asks for one (nd
+ * runs its game and its shell on one /nd socket), and a PTY that exits hands the
+ * socket back to a client that has to start echoing again. */
+static void
+mux_state_echo(socket_t cfd, struct mux_state *s, int owner)
+{
+  if (s->echo_owner == owner)
+    return;
+  TELNET_CMD(cfd, IAC, owner == ECHO_PTY ? WILL : WONT, TELOPT_ECHO);
+  s->echo_owner = owner;
+}
 
 /* fd (uint32) → struct mux_state */
 static uint32_t mux_map;
@@ -188,7 +217,14 @@ mux_init(void)
  * clears ECHO and no code renegotiates it later: readline only echoes at all
  * when it inherits ECHO on, and a program that clears ECHO (vim) is about to
  * render the line itself. Two echoers is the one outcome nobody can recover
- * from, so there is never a second one. */
+ * from, so there is never a second one.
+ *
+ * ECHOCTL is cleared, and that is the one c_lflag flag we set. Browsers send
+ * DEL (0x7F) for Backspace and 0x7F is the Linux default erase character, so
+ * n_tty.c:eraser() takes its iscntrl() branch and echoes BS DEL BS -- a literal
+ * DEL on the wire, which is not something a terminal can render and which the
+ * browser's parser reports as a parse error. With ECHOCTL off the same keypress
+ * echoes BS SP BS, the sequence every terminal expects. */
 static void
 mux_pty_termios(socket_t pty, struct termios *t)
 {
@@ -197,6 +233,7 @@ mux_pty_termios(socket_t pty, struct termios *t)
   t->c_iflag &= ~(IGNCR | INLCR);
   t->c_oflag |= OPOST | ONLCR;
   t->c_oflag &= ~OCRNL;
+  t->c_lflag &= ~ECHOCTL;
 }
 
 static struct mux_state *
@@ -214,6 +251,10 @@ mux_ensure(socket_t fd)
     memset(&new_s, 0, sizeof(new_s));
     new_s.pty = -1;
     new_s.pid = -1;
+    /* Undeclared, not the memset's 0: nothing has been said to this client yet,
+     * and a state that claims ECHO_CLIENT would suppress a later
+     * mux_state_echo(..., ECHO_CLIENT) as a no-change. */
+    new_s.echo_owner = ECHO_UNDECLARED;
   }
 
   if (new_s.pty < 0) {
@@ -311,6 +352,18 @@ command_pty(socket_t cfd, struct winsize *ws, char * const args[])
   if (mux_ensure_pty(cfd, s) < 0)
     return -1;
 
+  /* State the echo policy here, where the echoer is actually born: a PTY has
+   * just been created and its line discipline is about to be the sole owner of
+   * echoing. It used to be stated from on_axil_connect instead, which only runs
+   * for our own GET:/tty route -- so a socket owned by another module (nd puts
+   * its game and its shell on one /nd socket) got a PTY with nobody having said
+   * WILL ECHO, and the client had been told nothing or worse. ECHO is a property
+   * of the PTY, not of the route that happens to own the socket, so it belongs
+   * on this path. Guarded on the owner rather than on "have we said it", because
+   * a second command on a socket whose PTY died and was replaced has to say it
+   * again, and one that replaced a live PTY must not. */
+  mux_state_echo(cfd, s, ECHO_PTY);
+
   pid_t p = fork();
   if (p == 0) { /* child */
     axil_fork_child_reset();
@@ -400,7 +453,13 @@ XY_IMPL(int, axil_tty_exec,
 
 XY_IMPL(int, axil_tty_shell, socket_t, fd)
 {
-  char *argv[] = { "/bin/sh", NULL };
+  /* NULL argv selects command_pty()'s alt_args: the connection user's login
+   * shell, falling back through mux_pw to /bin/sh (see b0485b0's first
+   * hunk). Passing an explicit argv[0] here would bypass that whole chain
+   * -- which is how every `sh` silently landed in dash, a canonical-mode
+   * reader with no line editing, where arrow keys arrive as raw escape
+   * bytes instead of history. */
+  char *argv[] = { NULL, NULL };
   return axil_tty_exec(fd, argv);
 }
 
@@ -414,6 +473,50 @@ XY_IMPL(int, axil_tty_owns, socket_t, fd)
 {
   struct mux_state *s = mux_get(fd);
   return (s && s->owns_client) ? 1 : 0;
+}
+
+XY_IMPL(int, axil_tty_attach, socket_t, fd)
+{
+  /* Create the per-connection state without opening a PTY. mux_ensure() cannot
+   * be reused here: it opens a PTY as a side effect, and the point of attach is
+   * to negotiate a socket whose PTY does not exist yet -- the shell arrives
+   * later, from axil_tty_shell()/axil_tty_exec(), and command_pty() is where
+   * ECHO is stated for it. */
+  mux_init();
+  struct mux_state *s = mux_get(fd);
+  if (!s) {
+    struct mux_state new_s;
+    memset(&new_s, 0, sizeof(new_s));
+    new_s.pty = -1;
+    new_s.pid = -1;
+    /* Not left at the memset's 0, which is ECHO_CLIENT: it has to read as
+     * "nothing said yet" or the statement below is suppressed as a no-change and
+     * the client is told nothing at all. */
+    new_s.echo_owner = ECHO_UNDECLARED;
+    /* auto_shell and owns_client stay 0: spawning a shell on first NAWS and
+     * claiming the /tty route are both properties of our own route handler,
+     * not of a socket somebody else owns. */
+    s = mux_put(fd, &new_s);
+    if (!s)
+      return -1;
+  }
+
+  /* WONT ECHO, not WILL. There is no PTY yet, and nothing else on this socket is
+   * going to echo either: the module that owns it runs a game there until a
+   * command asks for a shell, and a game does not echo its input line. Saying
+   * WILL here is the one thing that cannot be true of this moment, and it used to
+   * be the only thing said -- so the client sat as a pipe told the server would
+   * echo, with no echoer, and every keystroke vanished until a PTY happened to
+   * come along. Stating WONT makes the client the echo owner, which is what is
+   * actually true, and command_pty() hands the socket over when the driver
+   * becomes the owner in its turn. Guarded on the owner, so a second attach is
+   * not a new policy but a returning socket still is. */
+  mux_state_echo(fd, s, ECHO_CLIENT);
+  /* Re-stated unconditionally: the client is a browser terminal that will not
+   * send a window size unless asked, and this is a fresh connection. */
+  TELNET_CMD(fd, IAC, WONT, TELOPT_SGA);
+  TELNET_CMD(fd, IAC, DO, TELOPT_NAWS);
+  return 0;
 }
 
 static void
@@ -439,14 +542,21 @@ XY_IMPL(int, on_axil_connect, socket_t, fd)
   memset(&s, 0, sizeof(s));
   s.pty = -1;
   s.pid = -1;
+  s.echo_owner = ECHO_UNDECLARED;
 
   /* Send initial TELNET negotiations. WILL ECHO, and only ever once: the PTY
    * below keeps the line discipline's own ECHO, so this is the truth, and it is
    * the contract the client codes against -- it stays a pipe and lets the
-   * driver echo each keystroke as it arrives. */
+   * driver echo each keystroke as it arrives. command_pty() is where that
+   * handover normally happens; on this route the PTY is born right here, so
+   * state it here and record that it has been said. This route never calls
+   * axil_tty_attach(), so this is a first statement, not a change of owner --
+   * hence the direct TELNET_CMD rather than mux_state_echo(), which would need
+   * the state to be in the map first. */
   TELNET_CMD(fd, IAC, WILL, TELOPT_ECHO);
   TELNET_CMD(fd, IAC, WONT, TELOPT_SGA);
   TELNET_CMD(fd, IAC, DO, TELOPT_NAWS);
+  s.echo_owner = ECHO_PTY;
 
   CBUG(fcntl(fd, F_SETFL, O_NONBLOCK) == -1,
       "telnet_connected fcntl F_SETFL O_NONBLOCK\n");
@@ -456,15 +566,15 @@ XY_IMPL(int, on_axil_connect, socket_t, fd)
   CBUG(grantpt(s.pty),  "telnet_connected grantpt\n");
   CBUG(unlockpt(s.pty), "telnet_connected unlockpt\n");
 
-  /* Start from the OS defaults, then apply our one policy. mux_pty_termios()
-   * leaves ECHO off, which is what the WONT ECHO above told the client. */
+  /* Start from the OS defaults, then apply our one policy: the line discipline
+   * keeps its ECHO, because it is the only echoer on this connection. */
   mux_pty_termios(s.pty, &s.tty);
 
   struct mux_state *sp = mux_put(fd, &s);
 
-  /* We are the reader for this connection: axil drops WebSocket frames for the
-   * module to pull (it never sends them through on_axil_parse), so handle_tty
-   * watches the client fd and this module's on_axil_tick drains it. */
+  /* We are the reader for this connection, but not by claiming it: axil decodes
+   * the client's frames and delivers each payload to on_axil_parse, which is
+   * axil_tty_input(). Only the PTY master below is watched. */
   sp->owns_client = 1;
 
   /* reverse pty→client map */
@@ -562,31 +672,13 @@ XY_IMPL(int, on_axil_tick, socket_t, fd) {
   if (!mux_pty_map)
     return 0;
 
-  if (axil_flags(fd) & DF_WEBSOCKET) {
-    /* Client socket. axil deliberately does not hand WebSocket frames to
-     * on_axil_parse, so the module that owns the connection has to read them
-     * here. A borrowed connection belongs to the host module (axil-nd watches
-     * the fd itself and forwards through axil_tty_input), so leave it alone --
-     * two ticks draining one socket would split the frame stream. */
-    struct mux_state *s = mux_get(fd);
-    if (!s || !s->owns_client)
-      return 0;
+  /* Only a PTY master is ever watched now. The client side is unclaimed, so axil
+   * decodes its frames and delivers the payloads to on_axil_parse, and a
+   * borrowed socket is handled the same way -- which is what lets a host module
+   * such as axil-nd drop its own frame reading entirely. The only descriptors
+   * left reaching here are the PTY masters axil_fd_watch() was called on. */
 
-    static char cbuf[BUFSIZ * 4];
-    ssize_t n;
-    while ((n = axil_ws_read(fd, cbuf, sizeof(cbuf))) > 0)
-      axil_tty_input(fd, (unsigned char *)cbuf, (int)n);
-
-    return 0;
-  }
-
-  /* FD_EXTERN is shared with modules that watch client fds (axil-nd calls
-   * axil_fd_watch on the WebSocket client so it can read client frames). We
-   * only ever watch PTY masters ourselves, so a WebSocket fd here is someone
-   * else's descriptor. Falling through would hit the mux_pty_map miss below,
-   * which calls axil_clear_active(fd) == FD_CLR(fd, &fds_active) and would
-   * drop a live client from the select set. */
-  /* fd here is an externally-watched fd — look up the client fd */
+  /* fd here is a watched PTY master — look up the client fd */
   const uint32_t *cfd_p = corm_get(mux_pty_map, &(uint32_t){(uint32_t)fd});
 
   if (!cfd_p) {
@@ -625,7 +717,6 @@ XY_IMPL(int, on_axil_tick, socket_t, fd) {
       axil_clear_active(fd);
       return -1;
   default:
-    buf[ret] = '\0';
     axil_write(cfd, buf, ret);
     goto exit;
   }
@@ -641,11 +732,14 @@ XY_IMPL(int, on_axil_tick, socket_t, fd) {
     close(s->pty);
     s->pty = -1;
   }
-  /* The child is gone, so the socket is a bare line again. Re-assert the same
-   * WILL ECHO as on connect, not a new policy: the PTY never stopped echoing,
-   * and a client that had been told WONT ECHO by a program which has now exited
-   * needs telling that the driver is the echo owner again. */
-  TELNET_CMD(cfd, IAC, WILL, TELOPT_ECHO);
+  /* The child is gone and the PTY above is closed, so this socket has no echoer
+   * of its own again and the client has to take the job back -- the mirror image
+   * of axil_tty_attach() and of command_pty()'s handover, and the reason a guest
+   * who leaves a shell session is not left typing into a dead pipe. This used to
+   * re-assert WILL ECHO on the grounds that the policy was fixed per socket, but
+   * the policy is not fixed: it tracks whether a PTY exists, and one just stopped
+   * existing. */
+  mux_state_echo(cfd, s, ECHO_CLIENT);
   TELNET_CMD(cfd, IAC, WONT, TELOPT_SGA);
 exit:
   if (ret < 0)
@@ -727,11 +821,15 @@ handle_tty(socket_t fd, char *body)
   char key[ENV_VALUE_LEN] = {0};
   if (axil_env_get(fd, key, sizeof(key), "HTTP_SEC_WEBSOCKET_KEY") == 0) {
     axil_ws_upgrade(fd);
-    /* Mandatory after the handshake: axil does not route WebSocket frames
-     * through on_axil_parse, so without this nothing ever reads the client and
-     * axil_tty_input() is never called. It is what turns the descriptor into
-     * axil_fd_tick()'s, which reaches this module's on_axil_tick. */
-    axil_fd_watch(fd);
+    /* No axil_fd_watch() here on purpose. This used to be mandatory, with a
+     * comment saying so: axil did not route WebSocket frames through
+     * on_axil_parse, so a module had to claim the socket and read them from
+     * on_axil_tick. axil now decodes the frame itself and hands the payload to
+     * on_axil_parse, so the client needs no claim at all -- and claiming it
+     * would be actively wrong. axil_fd_watch() sets DF_EXTERN, which takes the
+     * descriptor out of descr_read() and gives it to axil_fd_tick() instead,
+     * so this module's own on_axil_tick would get the frames and
+     * on_axil_parse would never see a byte. */
     return 0;
   }
   serve_htdocs(fd, "index.html");
