@@ -814,8 +814,8 @@ handle_demo_js(socket_t fd, char *body)
   return 0;
 }
 
-static int
-handle_tty(socket_t fd, char *body)
+int
+axil_tty_handle_tty(socket_t fd, char *body)
 {
   (void)body;
   char key[ENV_VALUE_LEN] = {0};
@@ -851,5 +851,5 @@ xy_install(void)
   axil_register_handler("GET:/axil-tty.js",  handle_axil_tty_js);
   axil_register_handler("GET:/axil-tty.css", handle_axil_tty_css);
   axil_register_handler("GET:/demo.js",      handle_demo_js);
-  axil_register_handler("GET:" AXIL_TTY_ROUTE, handle_tty);
+  axil_register_handler("GET:" AXIL_TTY_ROUTE, axil_tty_handle_tty);
 }

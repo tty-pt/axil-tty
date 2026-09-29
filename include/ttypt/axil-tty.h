@@ -69,4 +69,13 @@ XY_DECL(int, axil_tty_attach, socket_t, fd);
  *  `input` is not modified. */
 XY_DECL(int, axil_tty_input, socket_t, fd, unsigned char *, input, int, nread);
 
+/** Serve this module's `GET:/tty` route: the browser terminal page, or a
+ *  WebSocket upgrade when the request carries one.
+ *
+ *  Exported so a host module that embeds this one (axil-nd) can register the
+ *  route itself rather than depending on the nested xy_load() that installs it
+ *  as a side effect. axil_register_handler() is last-wins, so registering it
+ *  from both places is safe. */
+int axil_tty_handle_tty(socket_t cfd, char *body);
+
 #endif
