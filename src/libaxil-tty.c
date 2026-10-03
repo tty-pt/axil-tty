@@ -81,6 +81,21 @@ struct mux_state {
   int            echo_owner; /* ECHO_UNDECLARED / ECHO_CLIENT / ECHO_PTY */
   struct winsize wsz;
   struct termios tty;
+  /* axil_generation() of the connection this state belongs to. This map is
+   * keyed by fd, and the kernel recycles fd numbers, so an entry that outlived
+   * its connection -- one whose teardown hook was missed, or that a module
+   * forgot to release -- would otherwise look live to whatever connection took
+   * the number next. mux_get() compares this and refuses a mismatch, which
+   * keeps a stale pty and its child shell from being driven by, or fed to, an
+   * unrelated request. SECURITY.md S5.4. */
+  unsigned long long gen;
+};
+
+/* The newest NAWS seen on a connection, plus the generation it belongs to, so
+ * a window size cannot be applied to a later connection that reused the fd. */
+struct mux_wsz {
+  unsigned long long gen;
+  struct winsize ws;
 };
 
 /* State who owns echoing on this socket, and only actually send an option when
@@ -107,7 +122,7 @@ mux_state_echo(socket_t cfd, struct mux_state *s, int owner)
 static uint32_t mux_map;
 /* pty_fd (uint32) → client_fd (uint32) reverse lookup */
 static uint32_t mux_pty_map;
-/* fd (uint32) → struct winsize, the latest NAWS seen on that connection.
+/* fd (uint32) → struct mux_wsz, the latest NAWS seen on that connection.
  * Deliberately separate from mux_map: a client negotiates its window size as
  * soon as its socket opens, which is long before any command (and therefore
  * any PTY) exists. On a route we do not own there is no mux_state at all, so
@@ -115,24 +130,35 @@ static uint32_t mux_pty_map;
 static uint32_t mux_wsz_map;
 
 static uint32_t mux_state_type;  /* corm type id for struct mux_state */
-static uint32_t mux_wsz_type;    /* corm type id for struct winsize */
+static uint32_t mux_wsz_type;    /* corm type id for struct mux_wsz */
 
 static void mux_init(void);
 
+/* Every accessor below re-checks the generation. The map key is the fd, which
+ * is not an identity: a new connection can land on the number of one that just
+ * closed. Returning NULL for a mismatch is what makes that safe -- the caller
+ * then takes its "I do not own this descriptor" path instead of driving
+ * somebody else's pty. SECURITY.md S5.4. */
 static struct mux_state *
 mux_get(socket_t fd)
 {
   if (!mux_map)
     return NULL;
-  return (struct mux_state *)corm_get(mux_map, &(uint32_t){(uint32_t)fd});
+  struct mux_state *s = (struct mux_state *)corm_get(mux_map, &(uint32_t){(uint32_t)fd});
+  if (s && s->gen != axil_generation(fd))
+    return NULL;
+  return s;
 }
 
-static struct winsize *
+static struct mux_wsz *
 mux_wsz_get(socket_t fd)
 {
   if (!mux_wsz_map)
     return NULL;
-  return (struct winsize *)corm_get(mux_wsz_map, &(uint32_t){(uint32_t)fd});
+  struct mux_wsz *w = (struct mux_wsz *)corm_get(mux_wsz_map, &(uint32_t){(uint32_t)fd});
+  if (w && w->gen != axil_generation(fd))
+    return NULL;
+  return w;
 }
 
 static void
@@ -140,7 +166,8 @@ mux_wsz_put(socket_t fd, const struct winsize *wsz)
 {
   if (!mux_wsz_map)
     mux_init();
-  corm_put(mux_wsz_map, &(uint32_t){(uint32_t)fd}, (void *)wsz);
+  struct mux_wsz w = { .gen = axil_generation(fd), .ws = *wsz };
+  corm_put(mux_wsz_map, &(uint32_t){(uint32_t)fd}, &w);
 }
 
 static void
@@ -156,8 +183,11 @@ mux_put(socket_t fd, struct mux_state *s)
 {
   if (!mux_map)
     mux_init();
+  /* Stamp the identity of the connection this state is being created for, so
+   * mux_get() can later tell it apart from a recycled fd. */
+  s->gen = axil_generation(fd);
   corm_put(mux_map, &(uint32_t){(uint32_t)fd}, s);
-  return (struct mux_state *)corm_get(mux_map, &(uint32_t){(uint32_t)fd});
+  return mux_get(fd);
 }
 
 static void
@@ -189,7 +219,7 @@ mux_init(void)
   if (mux_map)
     return;
   mux_state_type = corm_reg(sizeof(struct mux_state));
-  mux_wsz_type   = corm_reg(sizeof(struct winsize));
+  mux_wsz_type   = corm_reg(sizeof(struct mux_wsz));
   mux_map     = corm_open(NULL, NULL, CM_U32, mux_state_type, 0xFF, 0);
   mux_pty_map = corm_open(NULL, NULL, CM_U32, CM_U32,         0xFF, 0);
   mux_wsz_map = corm_open(NULL, NULL, CM_U32, mux_wsz_type,   0xFF, 0);
@@ -443,9 +473,9 @@ XY_IMPL(int, axil_tty_exec,
     return -1;
   /* The map holds the newest NAWS, which is later than anything in s->wsz when
    * the state was created by mux_ensure() rather than by on_axil_connect(). */
-  const struct winsize *wsz = mux_wsz_get(fd);
-  if (wsz)
-    s->wsz = *wsz;
+  struct mux_wsz *w = mux_wsz_get(fd);
+  if (w)
+    s->wsz = w->ws;
   s->pid = command_pty(fd, &s->wsz, (char * const *)argv);
   axil_fd_watch(s->pty);
   return 0;
@@ -653,6 +683,14 @@ XY_IMPL(int, axil_tty_input,
   }
 
   if (s && s->pid > 0 && i < nread) {
+    /* Hand the rest to the pty only for a connection this module still owns.
+     * mux_get() already rejected a recycled fd, so reaching here means the
+     * generation matched; the echo of the socket number and the first bytes is
+     * diagnostic for a case that should be impossible, and is opt-in so a
+     * silent corruption cannot hide in a normal log. */
+    if (getenv("AXIL_TTY_TRACE"))
+      fprintf(stderr, "axil_tty: fd=%d gen=%llu pty=%d pid=%d feeding %d bytes\n",
+              fd, s->gen, s->pty, s->pid, nread - i);
     write(s->pty, input + i, nread - i);
     return -1; /* signal: consumed by PTY, skip cmd_parse */
   }
@@ -665,6 +703,26 @@ XY_IMPL(int, on_axil_parse,
     unsigned char *, input,
     int, nread)
 {
+  /* HTTP request bytes are never telnet: the head routes in cmd_parse and a
+   * body may legally contain 0xFF, which the IAC scan below would misread as
+   * negotiation (and, through the caller's slide, delete the head in front of
+   * it -- SECURITY.md S5.5). WebSocket payloads are exempt: shell bytes ride
+   * frames and must still reach the PTY. Method list mirrors the one in
+   * axil-nd's is_http_method; both answer "does this chunk open with a request
+   * line" and nothing more. */
+  if (!(axil_flags(fd) & DF_WEBSOCKET) && nread > 5) {
+    static const char *const methods[] = {
+      "GET ", "POST ", "HEAD ", "PUT ", "OPTIONS ", "DELETE ", "PATCH ", "PRI "
+    };
+    size_t i = 0;
+    while (input[i] == ' ')
+      i++;
+    for (size_t m = 0; m < sizeof(methods) / sizeof(methods[0]); m++) {
+      size_t n = strlen(methods[m]);
+      if (i + n < (size_t)nread && strncmp((const char *)input + i, methods[m], n) == 0)
+        return 0;
+    }
+  }
   return axil_tty_input(fd, input, nread);
 }
 
