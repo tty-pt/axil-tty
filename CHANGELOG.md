@@ -1,14 +1,46 @@
-## Unreleased
+## 1.3.2
 
-- **Reverted `b0485b0`'s second hunk: `sh` spawns the login shell again.**
-  That commit meant to harden the empty-passwd fallback but changed
-  `axil_tty_shell` from `{NULL, NULL}` to `{"/bin/sh", NULL}`, which bypasses
-  `command_pty()`'s whole `pw_shell → mux_pw → /bin/sh` chain — every `sh`
-  landed in dash, a canonical-mode reader with no line editing, where arrow
-  keys arrived as raw escape bytes (cursor jumps plus garbage in the buffer,
-  since `ECHOCTL` stays off). Passing NULL restores the login shell
-  (`/bin/bash` here, readline, working history) while keeping the first
-  hunk's empty-field hardening intact.
+- **Fail closed on unauthenticated or automatic `-A` terminal access.** Who may
+  have a terminal is now resolved fresh for every request by `tty_identity()`,
+  and it is deliberately **not** `axil_get_pw()`: that call substitutes the
+  server's own entry for any unauthenticated descriptor, and three call sites
+  used to treat the substitution as the caller's identity. Now an
+  unauthenticated descriptor, a `-A`-published identity (`DF_AUTH_AUTO`), and a
+  name with no passwd entry all resolve to NULL — no identity, no terminal.
+  `tty_no_shell()` refuses the known no-op shells (`false`, `nologin`,
+  `/bin/false`, `/usr/bin/false`, `/sbin/nologin`, `/usr/sbin/nologin`) and
+  counts anything unrecognised as a real shell: it is a deny-list on purpose,
+  because the failure that must never happen is a no-shell account treated as
+  shellable. `tty_refuse()` answers with one log line and one client line —
+  the text travels as a WebSocket frame, so even a browser sees why before the
+  close — and there is no PTY, no fork. `drop_priviledges()` now takes the
+  resolved identity and refuses the child when there is none, and
+  `mux_init()` tolerates a chroot with no `/etc/passwd` (empty `mux_pw`,
+  nothing dereferences it).
+- **Generation-validated mux state; HTTP bypass (S5.4/S5.5).** `mux_state` and
+  the NAWS entry carry the connection generation and `mux_get()`/`mux_wsz_get()`
+  refuse a mismatch, so a leaked entry is inert on a recycled fd instead of
+  handing the next connection a live shell. Chunks that open with an HTTP
+  request line skip telnet processing entirely — a `0xFF` body byte used to be
+  read as IAC, which slid the request head off the input and answered the POST
+  with the telnet banner (shell bytes ride WebSocket frames and still reach the
+  PTY, so the exemption is only for the HTTP case). `AXIL_TTY_TRACE` logs PTY
+  handover instead of doing it silently, and the build now uses the in-tree
+  axil headers.
+- **Tests**: `test.sh` asserts an unauthenticated `/tty` yields no PTY, no
+  child and no output — only a refusal line, a close and a log entry — and
+  keeps the retained regression that an authenticated PTY connection killed
+  abruptly still cleans up.
+
+## [1.3.1]
+
+- **`axil_tty_handle_tty(cfd, body)` is exported** (it was the static
+  `handle_tty`): a host module that embeds this one — axil-nd — can register
+  the `GET:/tty` route itself instead of depending on the nested `xy_load()`
+  that installed it as a side effect. `axil_register_handler()` is last-wins,
+  so registering from both places is safe.
+
+## [1.3.0]
 
 - **Opt-in line mode for routes with no line discipline (`lineMode`).** A game
   socket says `WONT ECHO` and runs no PTY, so per-keystroke frames used to hit
@@ -21,6 +53,18 @@
   branch goes inert and every keystroke reaches the driver immediately, so
   there is still exactly one echoer in both states. Off by default; `/tty`
   behaviour is unchanged.
+
+## [1.2.1]
+
+- **Reverted `b0485b0`'s second hunk: `sh` spawns the login shell again.**
+  That commit meant to harden the empty-passwd fallback but changed
+  `axil_tty_shell` from `{NULL, NULL}` to `{"/bin/sh", NULL}`, which bypasses
+  `command_pty()`'s whole `pw_shell → mux_pw → /bin/sh` chain — every `sh`
+  landed in dash, a canonical-mode reader with no line editing, where arrow
+  keys arrived as raw escape bytes (cursor jumps plus garbage in the buffer,
+  since `ECHOCTL` stays off). Passing NULL restores the login shell
+  (`/bin/bash` here, readline, working history) while keeping the first
+  hunk's empty-field hardening intact.
 
 - **Fixed: nothing was echoed as you typed.** 1.2.0 (`66631d2`, "axil-nd
   compat") rewrote the browser client to impersonate a line discipline: buffer
@@ -59,7 +103,7 @@
   stated directly as a test, which fails under any policy where the client
   withholds bytes -- and that PTY output arrives CRLF-terminated.
 
-## 1.2.0
+## [1.2.0]
 
 - **Fixed the arm64 macOS (Homebrew) build.** The PTY child was spawned with
   `execvpe(3)`, a glibc extension (in POSIX.1-2008 TC1, but never implemented on
