@@ -31,6 +31,14 @@
   child and no output — only a refusal line, a close and a log entry — and
   keeps the retained regression that an authenticated PTY connection killed
   abruptly still cleans up.
+- **`npm install` no longer runs `make`.** The `postinstall` hook built
+  `lib/libaxil-tty.so` inside `node_modules`, but an npm consumer has no
+  sibling `../mk` checkout to satisfy `-include ./../mk/include.mk` — it
+  resolves to `node_modules/@tty-pt/mk`, which is not a dependency of this
+  package and does not exist, so every consumer install died with
+  `make: no target to make`. Nothing consumes that node_modules copy anyway:
+  host builds link the sibling checkout or the system-installed
+  `libaxil-tty.so`. Native builds stay in the checkout's own `make`.
 
 ## [1.3.1]
 
