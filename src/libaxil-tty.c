@@ -81,6 +81,21 @@ struct mux_state {
   int            echo_owner; /* ECHO_UNDECLARED / ECHO_CLIENT / ECHO_PTY */
   struct winsize wsz;
   struct termios tty;
+  /* axil_generation() of the connection this state belongs to. This map is
+   * keyed by fd, and the kernel recycles fd numbers, so an entry that outlived
+   * its connection -- one whose teardown hook was missed, or that a module
+   * forgot to release -- would otherwise look live to whatever connection took
+   * the number next. mux_get() compares this and refuses a mismatch, which
+   * keeps a stale pty and its child shell from being driven by, or fed to, an
+   * unrelated request. SECURITY.md S5.4. */
+  unsigned long long gen;
+};
+
+/* The newest NAWS seen on a connection, plus the generation it belongs to, so
+ * a window size cannot be applied to a later connection that reused the fd. */
+struct mux_wsz {
+  unsigned long long gen;
+  struct winsize ws;
 };
 
 /* State who owns echoing on this socket, and only actually send an option when
@@ -107,7 +122,7 @@ mux_state_echo(socket_t cfd, struct mux_state *s, int owner)
 static uint32_t mux_map;
 /* pty_fd (uint32) → client_fd (uint32) reverse lookup */
 static uint32_t mux_pty_map;
-/* fd (uint32) → struct winsize, the latest NAWS seen on that connection.
+/* fd (uint32) → struct mux_wsz, the latest NAWS seen on that connection.
  * Deliberately separate from mux_map: a client negotiates its window size as
  * soon as its socket opens, which is long before any command (and therefore
  * any PTY) exists. On a route we do not own there is no mux_state at all, so
@@ -115,24 +130,35 @@ static uint32_t mux_pty_map;
 static uint32_t mux_wsz_map;
 
 static uint32_t mux_state_type;  /* corm type id for struct mux_state */
-static uint32_t mux_wsz_type;    /* corm type id for struct winsize */
+static uint32_t mux_wsz_type;    /* corm type id for struct mux_wsz */
 
 static void mux_init(void);
 
+/* Every accessor below re-checks the generation. The map key is the fd, which
+ * is not an identity: a new connection can land on the number of one that just
+ * closed. Returning NULL for a mismatch is what makes that safe -- the caller
+ * then takes its "I do not own this descriptor" path instead of driving
+ * somebody else's pty. SECURITY.md S5.4. */
 static struct mux_state *
 mux_get(socket_t fd)
 {
   if (!mux_map)
     return NULL;
-  return (struct mux_state *)corm_get(mux_map, &(uint32_t){(uint32_t)fd});
+  struct mux_state *s = (struct mux_state *)corm_get(mux_map, &(uint32_t){(uint32_t)fd});
+  if (s && s->gen != axil_generation(fd))
+    return NULL;
+  return s;
 }
 
-static struct winsize *
+static struct mux_wsz *
 mux_wsz_get(socket_t fd)
 {
   if (!mux_wsz_map)
     return NULL;
-  return (struct winsize *)corm_get(mux_wsz_map, &(uint32_t){(uint32_t)fd});
+  struct mux_wsz *w = (struct mux_wsz *)corm_get(mux_wsz_map, &(uint32_t){(uint32_t)fd});
+  if (w && w->gen != axil_generation(fd))
+    return NULL;
+  return w;
 }
 
 static void
@@ -140,7 +166,8 @@ mux_wsz_put(socket_t fd, const struct winsize *wsz)
 {
   if (!mux_wsz_map)
     mux_init();
-  corm_put(mux_wsz_map, &(uint32_t){(uint32_t)fd}, (void *)wsz);
+  struct mux_wsz w = { .gen = axil_generation(fd), .ws = *wsz };
+  corm_put(mux_wsz_map, &(uint32_t){(uint32_t)fd}, &w);
 }
 
 static void
@@ -156,8 +183,11 @@ mux_put(socket_t fd, struct mux_state *s)
 {
   if (!mux_map)
     mux_init();
+  /* Stamp the identity of the connection this state is being created for, so
+   * mux_get() can later tell it apart from a recycled fd. */
+  s->gen = axil_generation(fd);
   corm_put(mux_map, &(uint32_t){(uint32_t)fd}, s);
-  return (struct mux_state *)corm_get(mux_map, &(uint32_t){(uint32_t)fd});
+  return mux_get(fd);
 }
 
 static void
@@ -189,7 +219,7 @@ mux_init(void)
   if (mux_map)
     return;
   mux_state_type = corm_reg(sizeof(struct mux_state));
-  mux_wsz_type   = corm_reg(sizeof(struct winsize));
+  mux_wsz_type   = corm_reg(sizeof(struct mux_wsz));
   mux_map     = corm_open(NULL, NULL, CM_U32, mux_state_type, 0xFF, 0);
   mux_pty_map = corm_open(NULL, NULL, CM_U32, CM_U32,         0xFF, 0);
   mux_wsz_map = corm_open(NULL, NULL, CM_U32, mux_wsz_type,   0xFF, 0);
@@ -197,10 +227,63 @@ mux_init(void)
   if (!mux_pw.pw_name) {
     char euname[BUFSIZ] = "root";
     struct passwd *pw = getpwuid(geteuid());
-    if (pw)
+    if (pw) {
       strncpy(euname, pw->pw_name, sizeof(euname) - 1);
-    axil_tty_pw_copy(&mux_pw, getpwnam(euname));
+      euname[sizeof(euname) - 1] = '\0';
+    }
+    pw = getpwnam(euname);
+    if (pw)
+      axil_tty_pw_copy(&mux_pw, pw);
+    /* else: no entry to copy (a chroot without /etc/passwd, F9). mux_pw stays
+     * empty and nothing below may dereference it. */
   }
+}
+
+/* Who may have a terminal, resolved fresh for every request.
+ *
+ * Deliberately NOT axil_get_pw(): that call substitutes the server's own entry
+ * for any unauthenticated descriptor, and three places below used to treat that
+ * substitution as the caller's identity. Here an unauthenticated descriptor, a
+ * -A-published identity, and a name with no passwd entry all resolve to NULL:
+ * no identity, no terminal.
+ *
+ * The returned pointer is getpwnam()'s static storage. Use it before anything
+ * else can call getpwnam(), i.e. immediately, in this call stack. */
+static struct passwd *
+tty_identity(socket_t fd)
+{
+  char user[BUFSIZ] = "";
+
+  if (fd < 0 || fd >= FD_SETSIZE)          /* axil_flags() does not check */
+    return NULL;
+  if (axil_flags(fd) & DF_AUTH_AUTO)
+    return NULL;          /* -A published the server's own identity */
+  if (axil_env_get(fd, user, sizeof(user), "REMOTE_USER") != 0 || !*user)
+    return NULL;          /* nobody authenticated */
+  return getpwnam(user);    /* NULL for a non-account: refuse */
+}
+
+/* Deny-list on purpose: the failure that must never happen is a no-shell
+ * account treated as shellable, so only known no-op shells refuse and anything
+ * unrecognised still counts as a real shell. */
+static int
+tty_no_shell(const char *shell)
+{
+  return !shell || !*shell
+      || !strcmp(shell, "false")        || !strcmp(shell, "nologin")
+      || !strcmp(shell, "/bin/false")   || !strcmp(shell, "/usr/bin/false")
+      || !strcmp(shell, "/sbin/nologin") || !strcmp(shell, "/usr/sbin/nologin");
+}
+
+/* Refuse and close: one log line, one client line, no PTY, no fork. The client
+ * text travels as a WebSocket frame (axil_write frames for WS fds), so even a
+ * browser sees why before the close. */
+static void
+tty_refuse(socket_t fd, const char *log_why, const char *msg)
+{
+  WARN("tty: terminal refused on %d: %s\n", fd, log_why);
+  axil_write(fd, (void *)msg, strlen(msg));
+  axil_close(fd);
 }
 
 /* The line-discipline policy every PTY we create starts from, and the single
@@ -273,38 +356,31 @@ mux_ensure(socket_t fd)
 }
 
 static struct passwd *
-drop_priviledges(socket_t fd)
+drop_priviledges(const struct passwd *pw)
 {
   int euid = geteuid();
 
-  struct passwd local_pw;
-  struct passwd *pw;
-
-  if (axil_get_pw(fd, &local_pw) == 0 && local_pw.pw_name && *local_pw.pw_name) {
-    /* authenticated — use the connection user; pw_name etc. point into
-       local_pw which is on the stack, but we only use it before execve */
-    pw = &local_pw;
-  } else {
-    pw = &mux_pw;
+  if (!pw || !pw->pw_name || !*pw->pw_name) {
+    WARN("tty: no passwd identity to drop to; refusing child\n");
+    return NULL;
   }
 
   if (!axil_config.chroot) {
     WARN("NOT_CHROOTED - running with %s\n", pw->pw_name);
-    return pw;
+    return (struct passwd *)pw;
   }
 
   if (euid != 0) {
     WARN("NOT_ROOT - skipping privilege drop for %s\n", pw->pw_name);
-    return pw;
+    return (struct passwd *)pw;
   }
 
-  CBUG(!pw, "getpwnam\n");
   CBUG(setgroups(0, NULL), "setgroups\n");
   CBUG(initgroups(pw->pw_name, pw->pw_gid), "initgroups\n");
   CBUG(setgid(pw->pw_gid), "setgid\n");
   CBUG(setuid(pw->pw_uid), "setuid\n");
 
-  return pw;
+  return (struct passwd *)pw;
 }
 
 static int
@@ -343,8 +419,17 @@ mux_ensure_pty(socket_t cfd, struct mux_state *s)
 /* PTY fork */
 
 static inline int
-command_pty(socket_t cfd, struct winsize *ws, char * const args[])
+command_pty(socket_t cfd, struct winsize *ws, char * const args[],
+    const struct passwd *id)
 {
+  /* Defence in depth: the gate in axil_tty_exec() guarantees an identity, but
+   * a future caller that skips it must still fail closed rather than fork. No
+   * abort: killing the server over a refused socket would be a remote DoS. */
+  if (!id || !id->pw_name || !*id->pw_name) {
+    WARN("command_pty: refused on %d: no passwd identity\n", cfd);
+    return -1;
+  }
+
   struct mux_state *s = mux_get(cfd);
   CBUG(!s, "command_pty: no mux state for fd %d\n", cfd);
   WARN("command_pty: called for cfd=%d args[0]=%s\n", cfd, args[0] ? args[0] : "(null)");
@@ -368,17 +453,24 @@ command_pty(socket_t cfd, struct winsize *ws, char * const args[])
   if (p == 0) { /* child */
     axil_fork_child_reset();
 
+    /* Copy the identity onto the stack before anything else can disturb
+     * getpwnam()'s static storage. The gate already refused a no-shell login
+     * shell, so reaching here with an empty shell means an explicit program,
+     * which is not a shell and stays reachable. */
+    char id_shell[BUFSIZ], id_dir[BUFSIZ], id_name[BUFSIZ];
+    snprintf(id_shell, sizeof(id_shell), "%s", id->pw_shell ? id->pw_shell : "");
+    snprintf(id_dir, sizeof(id_dir), "%s", id->pw_dir ? id->pw_dir : "/tmp");
+    snprintf(id_name, sizeof(id_name), "%s", id->pw_name ? id->pw_name : "user");
+
     (void)setsid();
 
     int slave_fd = open(ptsname(s->pty), O_RDWR);
     if (slave_fd == -1)
       _exit(1);
 
-    drop_priviledges(cfd);
-    struct passwd local_pw;
-    if (axil_get_pw(cfd, &local_pw) != 0 || !local_pw.pw_shell || !*local_pw.pw_shell) {
-      local_pw = mux_pw;
-    }
+    const struct passwd *pw = drop_priviledges(id);
+    if (!pw)
+      _exit(1);
 
     close(s->pty);
 
@@ -392,13 +484,18 @@ command_pty(socket_t cfd, struct winsize *ws, char * const args[])
     if (slave_fd > 2)
       close(slave_fd);
 
-    const char *sh = (local_pw.pw_shell && *local_pw.pw_shell) ? local_pw.pw_shell : "/bin/sh";
-    char *alt_args[] = { (char *)sh, NULL };
+    /* The shell field was vetted by the gate; a login shell here is real by
+     * construction. An explicit program never consults it. There is no
+     * fallback left: a login shell with an empty shell cannot reach this
+     * point, and the child exits rather than execing /bin/sh. */
+    if ((!args || !args[0]) && !*id_shell)
+      _exit(1);
+    char *alt_args[] = { id_shell, NULL };
     char * const *real_args = (args && args[0]) ? args : alt_args;
     char home[BUFSIZ], user[BUFSIZ], shell[BUFSIZ];
-    snprintf(home,  sizeof(home),  "HOME=%s",  local_pw.pw_dir ? local_pw.pw_dir : "/tmp");
-    snprintf(user,  sizeof(user),  "USER=%s",  local_pw.pw_name ? local_pw.pw_name : "user");
-    snprintf(shell, sizeof(shell), "SHELL=%s", sh);
+    snprintf(home,  sizeof(home),  "HOME=%s",  id_dir);
+    snprintf(user,  sizeof(user),  "USER=%s",  id_name);
+    snprintf(shell, sizeof(shell), "SHELL=%s", (args && args[0]) ? args[0] : id_shell);
 
     char * const env[] = {
 #ifdef __APPLE__
@@ -438,27 +535,53 @@ XY_IMPL(int, axil_tty_exec,
     socket_t, fd,
     char **, argv)
 {
+  /* The single choke point: command_pty() has exactly one caller, and the NAWS
+   * auto-spawn funnels through axil_tty_shell() below. Refusing here allocates
+   * no PTY (mux_ensure() opens one itself) and forks no child. A -A-published
+   * identity gets its own message: the name on it is the operator's own, so
+   * "no account" would be a lie and "automatic login" tells the operator
+   * exactly which switch to blame. */
+  if (fd >= 0 && (axil_flags(fd) & DF_AUTH_AUTO)) {
+    tty_refuse(fd, "automatic (-A) identity",
+        "Terminal disabled: automatic login.\n");
+    return -1;
+  }
+  struct passwd *id = tty_identity(fd);
+  if (!id) {
+    tty_refuse(fd, "no authenticated passwd identity",
+        "Terminal disabled: no account.\n");
+    return -1;
+  }
+  /* argv[0] set means an explicit program (man): reachable for any identity.
+   * A login shell (argv NULL, the sh path) requires a real shell. */
+  if ((!argv || !argv[0]) && tty_no_shell(id->pw_shell)) {
+    WARN("tty: terminal refused for %s: no shell\n", id->pw_name);
+    static const char msg[] = "Terminal disabled for this account.\n";
+    axil_write(fd, (void *)msg, sizeof(msg) - 1);
+    axil_close(fd);
+    return -1;
+  }
+
   struct mux_state *s = mux_ensure(fd);
   if (!s)
     return -1;
   /* The map holds the newest NAWS, which is later than anything in s->wsz when
    * the state was created by mux_ensure() rather than by on_axil_connect(). */
-  const struct winsize *wsz = mux_wsz_get(fd);
-  if (wsz)
-    s->wsz = *wsz;
-  s->pid = command_pty(fd, &s->wsz, (char * const *)argv);
+  struct mux_wsz *w = mux_wsz_get(fd);
+  if (w)
+    s->wsz = w->ws;
+  s->pid = command_pty(fd, &s->wsz, (char * const *)argv, id);
+  if (s->pid < 0)
+    return -1;
   axil_fd_watch(s->pty);
   return 0;
 }
 
 XY_IMPL(int, axil_tty_shell, socket_t, fd)
 {
-  /* NULL argv selects command_pty()'s alt_args: the connection user's login
-   * shell, falling back through mux_pw to /bin/sh (see b0485b0's first
-   * hunk). Passing an explicit argv[0] here would bypass that whole chain
-   * -- which is how every `sh` silently landed in dash, a canonical-mode
-   * reader with no line editing, where arrow keys arrive as raw escape
-   * bytes instead of history. */
+  /* NULL argv selects the connection user's login shell. The gate in
+   * axil_tty_exec() has already refused a no-shell account by this point, so
+   * there is no fallback left to state here. */
   char *argv[] = { NULL, NULL };
   return axil_tty_exec(fd, argv);
 }
@@ -537,6 +660,28 @@ XY_IMPL(int, on_axil_connect, socket_t, fd)
   axil_env_get(fd, doc_uri, sizeof(doc_uri), "DOCUMENT_URI");
   if (strcmp(doc_uri, AXIL_TTY_ROUTE) != 0)
     return 0;
+
+  /* Refuse before the PTY is born: the upgrade already allocated nothing, and
+   * mux state below would be the first allocation. A decline is invisible to
+   * axil's upgrade path, so close explicitly or every probe leaks one fd. The
+   * refusal text goes out as a frame first (so the client sees why), then the
+   * WS close, then the fd -- in that order, or the frames never flush. */
+  if (fd >= 0 && (axil_flags(fd) & DF_AUTH_AUTO)) {
+    WARN("tty: /tty refused on %d: automatic (-A) identity\n", fd);
+    static const char msg[] = "Terminal disabled: automatic login.\n";
+    axil_write(fd, (void *)msg, sizeof(msg) - 1);
+    axil_ws_close(fd);
+    axil_close(fd);
+    return 0;
+  }
+  if (!tty_identity(fd)) {
+    WARN("tty: /tty refused on %d: no authenticated passwd identity\n", fd);
+    static const char msg[] = "Terminal disabled: no account.\n";
+    axil_write(fd, (void *)msg, sizeof(msg) - 1);
+    axil_ws_close(fd);
+    axil_close(fd);
+    return 0;
+  }
 
   struct mux_state s;
   memset(&s, 0, sizeof(s));
@@ -653,6 +798,14 @@ XY_IMPL(int, axil_tty_input,
   }
 
   if (s && s->pid > 0 && i < nread) {
+    /* Hand the rest to the pty only for a connection this module still owns.
+     * mux_get() already rejected a recycled fd, so reaching here means the
+     * generation matched; the echo of the socket number and the first bytes is
+     * diagnostic for a case that should be impossible, and is opt-in so a
+     * silent corruption cannot hide in a normal log. */
+    if (getenv("AXIL_TTY_TRACE"))
+      fprintf(stderr, "axil_tty: fd=%d gen=%llu pty=%d pid=%d feeding %d bytes\n",
+              fd, s->gen, s->pty, s->pid, nread - i);
     write(s->pty, input + i, nread - i);
     return -1; /* signal: consumed by PTY, skip cmd_parse */
   }
@@ -665,6 +818,26 @@ XY_IMPL(int, on_axil_parse,
     unsigned char *, input,
     int, nread)
 {
+  /* HTTP request bytes are never telnet: the head routes in cmd_parse and a
+   * body may legally contain 0xFF, which the IAC scan below would misread as
+   * negotiation (and, through the caller's slide, delete the head in front of
+   * it -- SECURITY.md S5.5). WebSocket payloads are exempt: shell bytes ride
+   * frames and must still reach the PTY. Method list mirrors the one in
+   * axil-nd's is_http_method; both answer "does this chunk open with a request
+   * line" and nothing more. */
+  if (!(axil_flags(fd) & DF_WEBSOCKET) && nread > 5) {
+    static const char *const methods[] = {
+      "GET ", "POST ", "HEAD ", "PUT ", "OPTIONS ", "DELETE ", "PATCH ", "PRI "
+    };
+    size_t i = 0;
+    while (input[i] == ' ')
+      i++;
+    for (size_t m = 0; m < sizeof(methods) / sizeof(methods[0]); m++) {
+      size_t n = strlen(methods[m]);
+      if (i + n < (size_t)nread && strncmp((const char *)input + i, methods[m], n) == 0)
+        return 0;
+    }
+  }
   return axil_tty_input(fd, input, nread);
 }
 
