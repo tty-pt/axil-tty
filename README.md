@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="logo.png" alt="axil-tty logo" width="220" />
+</p>
+
 # axil-tty
 
 [![C99](https://img.shields.io/badge/C-C99-555?logo=c)](#)

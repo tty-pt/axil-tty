@@ -1,0 +1,10 @@
+prefix=/usr/local
+exec_prefix=${prefix}
+libdir=${exec_prefix}/lib
+includedir=${prefix}/include
+
+Name: axil-tty
+Description: WebSocket-to-PTY terminal streaming bridge module for Axil
+Version: 1.4.0
+Libs: -L${libdir} -laxil-tty -laxil -lcorm -lxylem
+Cflags: -I${includedir}

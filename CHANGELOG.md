@@ -1,3 +1,10 @@
+## 1.4.0
+
+- **Debut Synchronized Public Release**: Official public release of the WebSocket-to-PTY terminal streaming bridge module for Axil.
+- **Fail-Closed Terminal Access Security**: `tty_identity()` resolves caller credentials fresh per request and enforces strict authentication checks (`DF_AUTH_AUTO` / unauthenticated descriptors rejected).
+- **Generation-Validated Mux State**: Full generational tracking on connection descriptors preventing fd reuse race conditions.
+- **Telnet NAWS Window Resizing & PTY Bridge**: Automatic terminal resizing, ECHO and SGA negotiation, and browser terminal assets (`axil-tty.js`, `axil-tty.css`).
+
 ## 1.3.2
 
 - **Fail closed on unauthenticated or automatic `-A` terminal access.** Who may
