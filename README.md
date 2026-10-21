@@ -25,6 +25,7 @@ A dynamic module for [axil](https://github.com/tty-pt/axil) that adds:
 - [Install](#install)
 - [Build from source](#build-from-source)
 - [Quick start](#quick-start)
+- [Security & axil-auth Gating](#security--axil-auth-gating)
 - [Browser terminal](#browser-terminal)
 - [C API](#c-api)
 - [Testing](#testing)
@@ -52,15 +53,13 @@ A dynamic module for [axil](https://github.com/tty-pt/axil) that adds:
 
 Prebuilt packages are distributed from [tty.pt](https://tty.pt) for Linux (APT
 / Alpine / Arch / Fedora-RHEL), macOS (Homebrew), Windows (winget / MSYS2), and
-OpenBSD. Follow the [installation instructions]
-(https://github.com/tty-pt/ci/blob/main/docs/install.md) and use **libaxil-tty**
+OpenBSD. Follow the [installation instructions](https://github.com/tty-pt/ci/blob/main/docs/install.md) and use **libaxil-tty**
 as the package name. The module installs as `libaxil-tty.so` in the axil module
 directory, and the NPM terminal widget is published as `@tty-pt/libaxil-tty`.
 
 ## Build from source
 
-The module builds with a plain `make` (the shared [`mk` include.mk]
-(https://github.com/tty-pt/mk) is expected as a sibling directory):
+The module builds with a plain `make` (the shared [`mk` include.mk](https://github.com/tty-pt/mk) is expected as a sibling directory):
 
 ```sh
 make                  # builds lib/libaxil-tty.so (and the lib/axil-tty.so link)
@@ -98,6 +97,16 @@ hint above only matters when running from a source checkout.
 Open `http://localhost:8080/tty` for a terminal connected to a login shell.
 The module serves its page and WebSocket upgrade on `/tty`; the server root is
 not claimed by this module.
+
+## Security & axil-auth Gating
+
+When deployed in authenticated environments alongside [axil-auth](https://github.com/tty-pt/axil-auth):
+
+1. **Session Verification**: The `/tty` WebSocket endpoint extracts and validates the `QSESSION` cookie against in-memory corm session tables.
+2. **Login Shell Check**: `axil-tty` queries `getpwnam()` for the authenticated user's account.
+3. **Fail-Closed Gating**: If the account's shell is set to `/bin/false`, `/sbin/nologin`, or is absent, the connection is immediately terminated with HTTP 403 Forbidden before allocating a PTY. Only authorized system users with a valid POSIX shell (`/bin/sh`, `/bin/bash`) can establish interactive terminal sessions.
+
+---
 
 ## Browser terminal
 
