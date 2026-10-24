@@ -46,8 +46,9 @@ A dynamic module for [axil](https://github.com/tty-pt/axil) that adds:
   also registered, but see the caveat below: over a WebSocket axil never runs
   `cmd_parse`, so it is only reachable from a host module's own command
   pipeline (axil-nd), not by a client typing `sh`.
-- **Browser assets** — `axil-tty.js`, `axil-tty.css`, and `demo.js` served from
+- **Browser assets** — `axil-tty.js`, `axil-tty-bridge.js`, `axil-tty.css`, and `demo.js` served from
   `htdocs/` (installed under `share/axil/htdocs`).
+- **Decoupled Transport Bridge (`axil-tty-bridge.js`)** — pure terminal capability bridge that consumes the generic, port-scoped `axil-bridge.js` WebSocket bus, supporting local/vendored `@xterm/xterm` assets without CDN dependencies.
 
 ## Install
 
