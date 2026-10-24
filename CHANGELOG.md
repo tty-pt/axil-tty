@@ -1,11 +1,22 @@
-## 1.4.0
+## [1.4.1]
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/tty-pt/axil-tty/main/logo.png" alt="axil-tty logo" width="220" />
+</p>
+
+- **Pure TTY Capability Bridge (`htdocs/axil-tty-bridge.js`)**:
+  - Modularized browser terminal capability bridge consuming the generic `axil-bridge.js` transport bus.
+  - Integrated local `@xterm/xterm` support and terminal resizing over WebSocket.
+  - Synchronized WASM allowed imports list (`wasm-allowed-imports.lst`).
+
+## [1.4.0]
 
 - **Debut Synchronized Public Release**: Official public release of the WebSocket-to-PTY terminal streaming bridge module for Axil.
 - **Fail-Closed Terminal Access Security**: `tty_identity()` resolves caller credentials fresh per request and enforces strict authentication checks (`DF_AUTH_AUTO` / unauthenticated descriptors rejected).
 - **Generation-Validated Mux State**: Full generational tracking on connection descriptors preventing fd reuse race conditions.
 - **Telnet NAWS Window Resizing & PTY Bridge**: Automatic terminal resizing, ECHO and SGA negotiation, and browser terminal assets (`axil-tty.js`, `axil-tty.css`).
 
-## 1.3.2
+## [1.3.2]
 
 - **Fail closed on unauthenticated or automatic `-A` terminal access.** Who may
   have a terminal is now resolved fresh for every request by `tty_identity()`,
