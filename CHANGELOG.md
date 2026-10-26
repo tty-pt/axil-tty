@@ -1,4 +1,4 @@
-## [1.4.1]
+## [1.5.0]
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/tty-pt/axil-tty/main/logo.png" alt="axil-tty logo" width="220" />
