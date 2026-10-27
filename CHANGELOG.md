@@ -1,9 +1,5 @@
 ## [1.5.0]
 
-<p align="center">
-  <img src="https://raw.githubusercontent.com/tty-pt/axil-tty/main/logo.png" alt="axil-tty logo" width="220" />
-</p>
-
 - **Pure TTY Capability Bridge (`htdocs/axil-tty-bridge.js`)**:
   - Modularized browser terminal capability bridge consuming the generic `axil-bridge.js` transport bus.
   - Integrated local `@xterm/xterm` support and terminal resizing over WebSocket.

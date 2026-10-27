@@ -1,6 +1,6 @@
 {
   "name": "@tty-pt/axil-tty",
-  "version": "1.3.2",
+  "version": "1.3.3",
   "description": "AXIL PTY multiplexer module",
   "main": "cjs/axil-tty.js",
   "browser": "htdocs/axil-tty.js",

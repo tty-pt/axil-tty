@@ -18,10 +18,12 @@ function getExport(exports, names) {
 
 export function createAxilTtyBridge(root, getWasm) {
 	let term = null;
+	let fit = null;
 	let busUnsub = null;
 	let will_echo = true;
 	let line_buf = "";
 	const LINE_MAX = 1024;
+	let resizeRaf = 0;
 
 	function attachTerm(termEl, TerminalClass) {
 		if (term) return;
@@ -64,17 +66,32 @@ export function createAxilTtyBridge(root, getWasm) {
 			}
 		}
 
-		if (window.FitAddon && window.FitAddon.FitAddon) {
-			const fit = new window.FitAddon.FitAddon();
-			term.loadAddon(fit);
-			term.open(termEl);
-			try { fit.fit(); } catch (_) {}
-			window.addEventListener('resize', () => {
-				try { fit.fit(); sendNaws(); } catch (_) {}
-			});
-		} else {
-			term.open(termEl);
+		const FitClass = (window.FitAddon && (window.FitAddon.FitAddon || window.FitAddon)) || null;
+		if (FitClass) {
+			try {
+				fit = new FitClass();
+				term.loadAddon(fit);
+			} catch (e) {
+				console.warn('[axil-tty] Failed to load FitAddon:', e);
+				fit = null;
+			}
 		}
+
+		term.open(termEl);
+		if (fit) {
+			requestAnimationFrame(() => {
+				try { fit.fit(); } catch (_) {}
+			});
+		}
+
+		window.addEventListener('resize', () => {
+			if (resizeRaf) cancelAnimationFrame(resizeRaf);
+			resizeRaf = requestAnimationFrame(() => {
+				if (fit) {
+					try { fit.fit(); } catch (_) {}
+				}
+			});
+		});
 
 		term.onResize(() => sendNaws());
 
@@ -155,31 +172,60 @@ export function createAxilTtyBridge(root, getWasm) {
 			const termEl = (root && root.querySelector('[data-bud-terminal]')) || document.querySelector('[data-bud-terminal]');
 			if (!termEl || termEl.__attached) return;
 			termEl.__attached = true;
-			if (window.Terminal) {
-				attachTerm(termEl, window.Terminal);
-			} else {
-				const script = document.createElement('script');
-				script.src = '/vendor/xterm.js';
+
+			function loadScript(src, fallbackSrc, cb) {
+				const s = document.createElement('script');
+				s.src = src;
+				s.onload = () => cb(null);
+				s.onerror = () => {
+					if (fallbackSrc) {
+						const fb = document.createElement('script');
+						fb.src = fallbackSrc;
+						fb.onload = () => cb(null);
+						fb.onerror = (err) => cb(err);
+						document.head.appendChild(fb);
+					} else {
+						cb(new Error(`Failed to load ${src}`));
+					}
+				};
+				document.head.appendChild(s);
+			}
+
+			if (!document.querySelector('link[href*="xterm"]')) {
 				const link = document.createElement('link');
 				link.rel = 'stylesheet';
 				link.href = '/vendor/xterm.css';
+				link.onerror = () => {
+					link.href = 'https://unpkg.com/@xterm/xterm@6.0.0/css/xterm.css';
+				};
 				document.head.appendChild(link);
-				script.onload = () => {
-					if (window.Terminal) attachTerm(termEl, window.Terminal);
-				};
-				script.onerror = () => {
-					const fallbackScript = document.createElement('script');
-					fallbackScript.src = 'https://unpkg.com/@xterm/xterm@6.0.0/lib/xterm.js';
-					const fallbackLink = document.createElement('link');
-					fallbackLink.rel = 'stylesheet';
-					fallbackLink.href = 'https://unpkg.com/@xterm/xterm@6.0.0/css/xterm.css';
-					document.head.appendChild(fallbackLink);
-					fallbackScript.onload = () => {
-						if (window.Terminal) attachTerm(termEl, window.Terminal);
-					};
-					document.head.appendChild(fallbackScript);
-				};
-				document.head.appendChild(script);
+			}
+
+			let xtermDone = !!window.Terminal;
+			let fitDone = !!(window.FitAddon && (window.FitAddon.FitAddon || window.FitAddon));
+
+			function onScriptsReady() {
+				if (xtermDone && fitDone && window.Terminal) {
+					attachTerm(termEl, window.Terminal);
+				}
+			}
+
+			if (!xtermDone) {
+				loadScript(
+					'/vendor/xterm.js',
+					'https://unpkg.com/@xterm/xterm@6.0.0/lib/xterm.js',
+					() => { xtermDone = true; onScriptsReady(); }
+				);
+			}
+			if (!fitDone) {
+				loadScript(
+					'/vendor/addon-fit.js',
+					'https://unpkg.com/@xterm/addon-fit@0.11.0/lib/addon-fit.js',
+					() => { fitDone = true; onScriptsReady(); }
+				);
+			}
+			if (xtermDone && fitDone) {
+				onScriptsReady();
 			}
 		},
 		makeImports() {
@@ -197,6 +243,10 @@ export function createAxilTtyBridge(root, getWasm) {
 			return this.makeImports();
 		},
 		destroy() {
+			if (resizeRaf) {
+				cancelAnimationFrame(resizeRaf);
+				resizeRaf = 0;
+			}
 			if (busUnsub) {
 				busUnsub();
 				busUnsub = null;
@@ -205,6 +255,7 @@ export function createAxilTtyBridge(root, getWasm) {
 				try { term.dispose(); } catch (_) {}
 				term = null;
 			}
+			fit = null;
 		}
 	};
 }

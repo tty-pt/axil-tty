@@ -256,8 +256,6 @@ tty_identity(socket_t fd)
 
   if (fd < 0 || fd >= FD_SETSIZE)          /* axil_flags() does not check */
     return NULL;
-  if (axil_flags(fd) & DF_AUTH_AUTO)
-    return NULL;          /* -A published the server's own identity */
   if (axil_env_get(fd, user, sizeof(user), "REMOTE_USER") != 0 || !*user)
     return NULL;          /* nobody authenticated */
   return getpwnam(user);    /* NULL for a non-account: refuse */
@@ -541,7 +539,7 @@ XY_IMPL(int, axil_tty_exec,
    * identity gets its own message: the name on it is the operator's own, so
    * "no account" would be a lie and "automatic login" tells the operator
    * exactly which switch to blame. */
-  if (fd >= 0 && (axil_flags(fd) & DF_AUTH_AUTO)) {
+  if (fd >= 0 && (axil_flags(fd) & DF_AUTH_AUTO) && geteuid() == 0) {
     tty_refuse(fd, "automatic (-A) identity",
         "Terminal disabled: automatic login.\n");
     return -1;
@@ -666,7 +664,7 @@ XY_IMPL(int, on_axil_connect, socket_t, fd)
    * axil's upgrade path, so close explicitly or every probe leaks one fd. The
    * refusal text goes out as a frame first (so the client sees why), then the
    * WS close, then the fd -- in that order, or the frames never flush. */
-  if (fd >= 0 && (axil_flags(fd) & DF_AUTH_AUTO)) {
+  if (fd >= 0 && (axil_flags(fd) & DF_AUTH_AUTO) && geteuid() == 0) {
     WARN("tty: /tty refused on %d: automatic (-A) identity\n", fd);
     static const char msg[] = "Terminal disabled: automatic login.\n";
     axil_write(fd, (void *)msg, sizeof(msg) - 1);
