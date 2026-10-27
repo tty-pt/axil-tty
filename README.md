@@ -48,16 +48,21 @@ When deployed in authenticated environments alongside [axil-auth](https://github
 
 ## 3. Browser Terminal Integration (NPM)
 
-Install the frontend package:
+### Install via NPM
+Install `@tty-pt/axil-tty` alongside the required peer dependencies:
 
 ```bash
-npm install @tty-pt/libaxil-tty
+# In your web project:
+npm install @tty-pt/axil-tty @xterm/xterm @xterm/addon-fit
+
+# Or install globally for the terminal CLI:
+npm install -g @tty-pt/axil-tty
 ```
 
-Embed in any web application:
+### Embed in Any Web Application
 
 ```javascript
-import { create } from "@tty-pt/libaxil-tty";
+import { create } from "@tty-pt/axil-tty";
 
 const term = create(document.getElementById("terminal"), {
   url: `ws://${location.hostname}:${location.port}/tty`,
