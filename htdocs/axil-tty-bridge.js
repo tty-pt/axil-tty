@@ -78,20 +78,24 @@ export function createAxilTtyBridge(root, getWasm) {
 		}
 
 		term.open(termEl);
-		if (fit) {
+		if (fit && typeof requestAnimationFrame === 'function') {
 			requestAnimationFrame(() => {
 				try { fit.fit(); } catch (_) {}
 			});
 		}
 
-		window.addEventListener('resize', () => {
-			if (resizeRaf) cancelAnimationFrame(resizeRaf);
-			resizeRaf = requestAnimationFrame(() => {
-				if (fit) {
-					try { fit.fit(); } catch (_) {}
+		if (typeof window !== 'undefined' && window.addEventListener) {
+			window.addEventListener('resize', () => {
+				if (resizeRaf && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(resizeRaf);
+				if (typeof requestAnimationFrame === 'function') {
+					resizeRaf = requestAnimationFrame(() => {
+						if (fit) {
+							try { fit.fit(); } catch (_) {}
+						}
+					});
 				}
 			});
-		});
+		}
 
 		term.onResize(() => sendNaws());
 

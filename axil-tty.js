@@ -282,5 +282,38 @@ function create(element, options = {}) {
   return sub;
 }
 
-window.ttyAxil = { create };
-export default { create };
+export class TerminalController {
+  constructor(element, options = {}) {
+    this.session = create(element, options);
+  }
+
+  write(data) {
+    if (this.session && this.session.write) this.session.write(data);
+  }
+
+  send(data) {
+    if (this.session && this.session.send) this.session.send(data);
+  }
+
+  resize(cols, rows) {
+    if (this.session && this.session.resize) this.session.resize(cols, rows);
+  }
+
+  close() {
+    if (this.session && this.session.ws && typeof this.session.ws.close === 'function') {
+      this.session.ws.close();
+    }
+  }
+
+  get terminal() {
+    return this.session ? this.session.term : null;
+  }
+}
+
+export { createAxilTtyBridge } from "./htdocs/axil-tty-bridge.js";
+
+if (typeof window !== 'undefined') {
+  window.ttyAxil = { create, TerminalController };
+}
+export default { create, TerminalController };
+
