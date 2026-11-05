@@ -170,11 +170,42 @@ export function createAxilTtyBridge(root, getWasm) {
 		}
 	}
 
+	function destroyInternal() {
+		if (resizeRaf) {
+			cancelAnimationFrame(resizeRaf);
+			resizeRaf = 0;
+		}
+		if (busUnsub) {
+			busUnsub();
+			busUnsub = null;
+		}
+		if (term) {
+			try { term.dispose(); } catch (_) {}
+			term = null;
+		}
+		fit = null;
+		line_buf = "";
+		will_echo = true;
+	}
+
 	return {
 		mount() {
-			if (term) return;
 			const termEl = (root && root.querySelector('[data-bud-terminal]')) || document.querySelector('[data-bud-terminal]');
-			if (!termEl || termEl.__attached) return;
+			if (!termEl) {
+				if (term && term.element && (!document.contains || !document.contains(term.element))) {
+					destroyInternal();
+				}
+				return;
+			}
+
+			if (term) {
+				if (term.element === termEl && (!document.contains || document.contains(termEl))) {
+					return;
+				}
+				destroyInternal();
+			}
+
+			if (termEl.__attached && termEl.querySelector && termEl.querySelector('.xterm')) return;
 			termEl.__attached = true;
 
 			function loadScript(src, fallbackSrc, cb) {
@@ -247,19 +278,7 @@ export function createAxilTtyBridge(root, getWasm) {
 			return this.makeImports();
 		},
 		destroy() {
-			if (resizeRaf) {
-				cancelAnimationFrame(resizeRaf);
-				resizeRaf = 0;
-			}
-			if (busUnsub) {
-				busUnsub();
-				busUnsub = null;
-			}
-			if (term) {
-				try { term.dispose(); } catch (_) {}
-				term = null;
-			}
-			fit = null;
+			destroyInternal();
 		}
 	};
 }
