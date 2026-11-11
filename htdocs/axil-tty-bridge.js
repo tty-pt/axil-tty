@@ -18,6 +18,7 @@ function getExport(exports, names) {
 
 export function createAxilTtyBridge(root, getWasm) {
 	let term = null;
+	let attachedEl = null;
 	let fit = null;
 	let busUnsub = null;
 	let will_echo = true;
@@ -88,6 +89,7 @@ export function createAxilTtyBridge(root, getWasm) {
 		}
 
 		term.open(termEl);
+		attachedEl = termEl;
 		flushPendingWrites();
 		if (fit && typeof requestAnimationFrame === 'function') {
 			requestAnimationFrame(() => {
@@ -211,6 +213,10 @@ export function createAxilTtyBridge(root, getWasm) {
 			try { term.dispose(); } catch (_) {}
 			term = null;
 		}
+		if (attachedEl) {
+			delete attachedEl.__attached;
+			attachedEl = null;
+		}
 		fit = null;
 		line_buf = "";
 		pendingWriteBuf = [];
@@ -231,14 +237,18 @@ export function createAxilTtyBridge(root, getWasm) {
 			}
 
 			if (term) {
-				if (term.element === termEl && (!document.contains || document.contains(termEl))) {
+				const isSameHost = (attachedEl === termEl) ||
+					(term.element === termEl) ||
+					(term.element && term.element.parentElement === termEl);
+				if (isSameHost && (!document.contains || document.contains(termEl))) {
 					return;
 				}
 				destroyInternal();
 			}
 
-			if (termEl.__attached && termEl.querySelector && termEl.querySelector('.xterm')) return;
+			if (termEl.__attached) return;
 			termEl.__attached = true;
+			attachedEl = termEl;
 
 			function loadScript(src, fallbackSrc, cb) {
 				const s = document.createElement('script');
