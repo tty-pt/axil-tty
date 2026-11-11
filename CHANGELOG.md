@@ -1,3 +1,20 @@
+## [Unreleased] (target: v1.6.0)
+
+### Added
+- **Web HAL Bridge & TerminalController Exports (`package.json`, `types/`, `cjs/`)**:
+  - Exported standard capability bridge and `TerminalController` under `@tty-pt/axil-tty`.
+  - Added CommonJS distribution wrapper in `cjs/axil-tty.js`.
+  - Added TypeScript definitions in `types/axil-tty.d.ts` and `types/bridge.d.ts`.
+  - Untracked gitignore entries to ensure `htdocs/`, `cjs/`, and `types/` are committed and tracked.
+
+### Fixed
+- **DOM Container Lifecycle & Write Buffering**:
+  - Enhanced DOM container unmount and remount lifecycle in `htdocs/axil-tty-bridge.js`.
+  - Added write buffering (`pendingWriteBuf`) during detached or pending bridge states to prevent early terminal write drops before mount.
+
+### Changed
+- Replaced legacy logging comments with stllog and cleaned dependencies.
+
 ## [1.5.0]
 
 - **Pure TTY Capability Bridge (`htdocs/axil-tty-bridge.js`)**:
