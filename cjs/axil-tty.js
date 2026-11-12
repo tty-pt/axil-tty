@@ -1,4 +1,4 @@
-const { createAxilTtyBridge } = require('../htdocs/axil-tty-bridge.js');
+const { createAxilTtyBridge } = require('../htdocs/axil-tty-cap.js');
 
 let term_max = 0;
 

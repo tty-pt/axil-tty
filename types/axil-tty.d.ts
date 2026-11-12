@@ -32,4 +32,4 @@ export declare class TerminalController {
   readonly terminal: any;
 }
 
-export { createAxilTtyBridge } from "../htdocs/axil-tty-bridge.js";
+export { createAxilTtyBridge } from "../htdocs/axil-tty-cap.js";

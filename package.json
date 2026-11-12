@@ -19,9 +19,13 @@
       "import": "./axil-tty.js",
       "default": "./cjs/axil-tty.js"
     },
+    "./cap": {
+      "types": "./types/bridge.d.ts",
+      "default": "./htdocs/axil-tty-cap.js"
+    },
     "./bridge": {
       "types": "./types/bridge.d.ts",
-      "default": "./htdocs/axil-tty-bridge.js"
+      "default": "./htdocs/axil-tty-cap.js"
     },
     "./axil-tty.css": "./htdocs/axil-tty.css"
   },

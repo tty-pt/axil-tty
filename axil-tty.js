@@ -310,7 +310,7 @@ export class TerminalController {
   }
 }
 
-export { createAxilTtyBridge } from "./htdocs/axil-tty-bridge.js";
+export { createAxilTtyBridge } from "./htdocs/axil-tty-cap.js";
 
 if (typeof window !== 'undefined') {
   window.ttyAxil = { create, TerminalController };
