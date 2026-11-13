@@ -18,12 +18,23 @@ function getExport(exports, names) {
 
 export function createAxilTtyBridge(root, getWasm) {
 	let term = null;
+	let attachedEl = null;
 	let fit = null;
 	let busUnsub = null;
 	let will_echo = true;
 	let line_buf = "";
 	const LINE_MAX = 1024;
 	let resizeRaf = 0;
+	let resizeObs = null;
+	let pendingWriteBuf = [];
+
+	function flushPendingWrites() {
+		if (!term || pendingWriteBuf.length === 0) return;
+		for (const chunk of pendingWriteBuf) {
+			try { term.write(chunk); } catch (_) {}
+		}
+		pendingWriteBuf = [];
+	}
 
 	function attachTerm(termEl, TerminalClass) {
 		if (term) return;
@@ -48,7 +59,7 @@ export function createAxilTtyBridge(root, getWasm) {
 		}
 
 		function sendOut(text) {
-			const wasm = getWasm();
+			const wasm = getWasm ? getWasm() : null;
 			const fn = getExport(wasm, ['wasm_term_on_input']);
 			const malloc = getExport(wasm, ['malloc']);
 			const free = getExport(wasm, ['free']);
@@ -61,6 +72,8 @@ export function createAxilTtyBridge(root, getWasm) {
 					fn(ptr, bytes.length);
 				}
 				free(ptr);
+			} else if (typeof window !== 'undefined' && typeof window.__stele_tty_input === 'function') {
+				window.__stele_tty_input(text);
 			} else if (window.__axil_ws && window.__axil_ws.send) {
 				window.__axil_ws.send(text);
 			}
@@ -77,21 +90,42 @@ export function createAxilTtyBridge(root, getWasm) {
 			}
 		}
 
+		delete termEl.__attaching;
+		delete termEl.__attached;
 		term.open(termEl);
-		if (fit) {
+		attachedEl = termEl;
+		flushPendingWrites();
+		if (fit && typeof requestAnimationFrame === 'function') {
 			requestAnimationFrame(() => {
 				try { fit.fit(); } catch (_) {}
 			});
 		}
 
-		window.addEventListener('resize', () => {
-			if (resizeRaf) cancelAnimationFrame(resizeRaf);
-			resizeRaf = requestAnimationFrame(() => {
-				if (fit) {
-					try { fit.fit(); } catch (_) {}
-				}
-			});
-		});
+		function scheduleFit() {
+			if (resizeRaf && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(resizeRaf);
+			if (typeof requestAnimationFrame === 'function') {
+				resizeRaf = requestAnimationFrame(() => {
+					resizeRaf = 0;
+					if (fit) {
+						try { fit.fit(); } catch (_) {}
+					}
+				});
+			}
+		}
+
+		if (typeof window !== 'undefined' && window.addEventListener) {
+			window.addEventListener('resize', scheduleFit);
+		}
+
+		if (typeof ResizeObserver !== 'undefined') {
+			try {
+				resizeObs = new ResizeObserver(() => scheduleFit());
+				resizeObs.observe(termEl);
+				if (termEl.parentElement) resizeObs.observe(termEl.parentElement);
+			} catch (_) {
+				resizeObs = null;
+			}
+		}
 
 		term.onResize(() => sendNaws());
 
@@ -166,12 +200,62 @@ export function createAxilTtyBridge(root, getWasm) {
 		}
 	}
 
+	function destroyInternal() {
+		if (resizeObs) {
+			try { resizeObs.disconnect(); } catch (_) {}
+			resizeObs = null;
+		}
+		if (resizeRaf) {
+			cancelAnimationFrame(resizeRaf);
+			resizeRaf = 0;
+		}
+		if (busUnsub) {
+			busUnsub();
+			busUnsub = null;
+		}
+		if (term) {
+			try { term.dispose(); } catch (_) {}
+			term = null;
+		}
+		if (attachedEl) {
+			delete attachedEl.__attaching;
+			delete attachedEl.__attached;
+			attachedEl = null;
+		}
+		fit = null;
+		line_buf = "";
+		pendingWriteBuf = [];
+		will_echo = true;
+	}
+
 	return {
 		mount() {
-			if (term) return;
-			const termEl = (root && root.querySelector('[data-bud-terminal]')) || document.querySelector('[data-bud-terminal]');
-			if (!termEl || termEl.__attached) return;
-			termEl.__attached = true;
+			const termEl = (root && root.matches && root.matches('[data-bud-terminal]'))
+				? root
+				: ((root && root.querySelector && root.querySelector('[data-bud-terminal]')) ||
+				   (typeof document !== 'undefined' && document.querySelector && document.querySelector('[data-bud-terminal]')));
+			if (!termEl) {
+				if (term && term.element && (!document.contains || !document.contains(term.element))) {
+					destroyInternal();
+				}
+				return;
+			}
+
+			if (term) {
+				const isSameHost = (attachedEl === termEl) ||
+					(term.element === termEl) ||
+					(term.element && (termEl === term.element || (termEl.contains && termEl.contains(term.element))));
+				if (isSameHost && (!document.contains || document.contains(termEl))) {
+					return;
+				}
+				destroyInternal();
+			}
+
+			if (termEl.__attaching && (!document.contains || document.contains(termEl))) {
+				return;
+			}
+			termEl.__attaching = true;
+			attachedEl = termEl;
 
 			function loadScript(src, fallbackSrc, cb) {
 				const s = document.createElement('script');
@@ -205,6 +289,8 @@ export function createAxilTtyBridge(root, getWasm) {
 			let fitDone = !!(window.FitAddon && (window.FitAddon.FitAddon || window.FitAddon));
 
 			function onScriptsReady() {
+				delete termEl.__attaching;
+				delete termEl.__attached;
 				if (xtermDone && fitDone && window.Terminal) {
 					attachTerm(termEl, window.Terminal);
 				}
@@ -229,40 +315,52 @@ export function createAxilTtyBridge(root, getWasm) {
 			}
 		},
 		makeImports() {
+			const globalScope = typeof window !== 'undefined' ? window : globalThis;
 			return {
 				term_write(str_ptr, str_len) {
-					if (!term) return;
-					const exports = getWasm();
+					const exports = getWasm ? getWasm() : null;
 					if (!exports || !exports.memory) return;
 					const text = readWasmStr(exports.memory, str_ptr, str_len);
-					term.write(text);
+					if (typeof document === 'undefined' && typeof globalScope.__stele_worker_post === 'function') {
+						globalScope.__stele_worker_post({ type: 'stele:tty_write', text });
+						return;
+					}
+					if (term) {
+						term.write(text);
+					} else if (pendingWriteBuf.length < 500) {
+						pendingWriteBuf.push(text);
+					}
 				}
 			};
+		},
+		writeText(text) {
+			if (term) {
+				term.write(text);
+			} else if (pendingWriteBuf.length < 500) {
+				pendingWriteBuf.push(text);
+			}
 		},
 		makeTtyImports() {
 			return this.makeImports();
 		},
 		destroy() {
-			if (resizeRaf) {
-				cancelAnimationFrame(resizeRaf);
-				resizeRaf = 0;
-			}
-			if (busUnsub) {
-				busUnsub();
-				busUnsub = null;
-			}
-			if (term) {
-				try { term.dispose(); } catch (_) {}
-				term = null;
-			}
-			fit = null;
+			destroyInternal();
 		}
 	};
 }
 
-if (typeof window !== 'undefined') {
-	window.__wasm_capability_registry = window.__wasm_capability_registry || {};
-	const ttyFactory = (root, getWasm) => createAxilTtyBridge(root, getWasm);
-	window.__wasm_capability_registry.tty = ttyFactory;
-	window.__wasm_capability_registry['axil-tty'] = ttyFactory;
+const _ttyGlobal = typeof window !== 'undefined' ? window : globalThis;
+_ttyGlobal.__wasm_capability_registry = _ttyGlobal.__wasm_capability_registry || {};
+const _ttyFactory = (root, getWasm) => {
+	const inst = createAxilTtyBridge(root, getWasm);
+	if (typeof window !== 'undefined') {
+		window.__axil_tty_bridge = inst;
+	}
+	return inst;
+};
+_ttyGlobal.__wasm_capability_registry.tty = _ttyFactory;
+_ttyGlobal.__wasm_capability_registry['axil-tty'] = _ttyFactory;
+if (typeof _ttyGlobal.registerWasmCapability === 'function') {
+	_ttyGlobal.registerWasmCapability('tty', _ttyFactory);
+	_ttyGlobal.registerWasmCapability('axil-tty', _ttyFactory);
 }
