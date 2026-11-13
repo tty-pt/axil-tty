@@ -59,7 +59,7 @@ export function createAxilTtyBridge(root, getWasm) {
 		}
 
 		function sendOut(text) {
-			const wasm = getWasm();
+			const wasm = getWasm ? getWasm() : null;
 			const fn = getExport(wasm, ['wasm_term_on_input']);
 			const malloc = getExport(wasm, ['malloc']);
 			const free = getExport(wasm, ['free']);
@@ -72,6 +72,8 @@ export function createAxilTtyBridge(root, getWasm) {
 					fn(ptr, bytes.length);
 				}
 				free(ptr);
+			} else if (typeof window !== 'undefined' && typeof window.__stele_tty_input === 'function') {
+				window.__stele_tty_input(text);
 			} else if (window.__axil_ws && window.__axil_ws.send) {
 				window.__axil_ws.send(text);
 			}
@@ -306,11 +308,16 @@ export function createAxilTtyBridge(root, getWasm) {
 			}
 		},
 		makeImports() {
+			const globalScope = typeof window !== 'undefined' ? window : globalThis;
 			return {
 				term_write(str_ptr, str_len) {
-					const exports = getWasm();
+					const exports = getWasm ? getWasm() : null;
 					if (!exports || !exports.memory) return;
 					const text = readWasmStr(exports.memory, str_ptr, str_len);
+					if (typeof document === 'undefined' && typeof globalScope.__stele_worker_post === 'function') {
+						globalScope.__stele_worker_post({ type: 'stele:tty_write', text });
+						return;
+					}
 					if (term) {
 						term.write(text);
 					} else if (pendingWriteBuf.length < 50) {
@@ -318,6 +325,13 @@ export function createAxilTtyBridge(root, getWasm) {
 					}
 				}
 			};
+		},
+		writeText(text) {
+			if (term) {
+				term.write(text);
+			} else if (pendingWriteBuf.length < 50) {
+				pendingWriteBuf.push(text);
+			}
 		},
 		makeTtyImports() {
 			return this.makeImports();
@@ -328,9 +342,18 @@ export function createAxilTtyBridge(root, getWasm) {
 	};
 }
 
-if (typeof window !== 'undefined') {
-	window.__wasm_capability_registry = window.__wasm_capability_registry || {};
-	const ttyFactory = (root, getWasm) => createAxilTtyBridge(root, getWasm);
-	window.__wasm_capability_registry.tty = ttyFactory;
-	window.__wasm_capability_registry['axil-tty'] = ttyFactory;
+const _ttyGlobal = typeof window !== 'undefined' ? window : globalThis;
+_ttyGlobal.__wasm_capability_registry = _ttyGlobal.__wasm_capability_registry || {};
+const _ttyFactory = (root, getWasm) => {
+	const inst = createAxilTtyBridge(root, getWasm);
+	if (typeof window !== 'undefined') {
+		window.__axil_tty_bridge = inst;
+	}
+	return inst;
+};
+_ttyGlobal.__wasm_capability_registry.tty = _ttyFactory;
+_ttyGlobal.__wasm_capability_registry['axil-tty'] = _ttyFactory;
+if (typeof _ttyGlobal.registerWasmCapability === 'function') {
+	_ttyGlobal.registerWasmCapability('tty', _ttyFactory);
+	_ttyGlobal.registerWasmCapability('axil-tty', _ttyFactory);
 }
