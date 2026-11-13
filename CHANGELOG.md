@@ -1,4 +1,4 @@
-## [Unreleased] (target: v1.6.0)
+## [1.6.0] - 2026-11-13
 
 ### Added
 - **Web HAL Bridge & TerminalController Exports (`package.json`, `types/`, `cjs/`)**:
