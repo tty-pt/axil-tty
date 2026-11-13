@@ -90,6 +90,8 @@ export function createAxilTtyBridge(root, getWasm) {
 			}
 		}
 
+		delete termEl.__attaching;
+		delete termEl.__attached;
 		term.open(termEl);
 		attachedEl = termEl;
 		flushPendingWrites();
@@ -216,6 +218,7 @@ export function createAxilTtyBridge(root, getWasm) {
 			term = null;
 		}
 		if (attachedEl) {
+			delete attachedEl.__attaching;
 			delete attachedEl.__attached;
 			attachedEl = null;
 		}
@@ -241,15 +244,17 @@ export function createAxilTtyBridge(root, getWasm) {
 			if (term) {
 				const isSameHost = (attachedEl === termEl) ||
 					(term.element === termEl) ||
-					(term.element && term.element.parentElement === termEl);
+					(term.element && (termEl === term.element || (termEl.contains && termEl.contains(term.element))));
 				if (isSameHost && (!document.contains || document.contains(termEl))) {
 					return;
 				}
 				destroyInternal();
 			}
 
-			if (termEl.__attached) return;
-			termEl.__attached = true;
+			if (termEl.__attaching && (!document.contains || document.contains(termEl))) {
+				return;
+			}
+			termEl.__attaching = true;
 			attachedEl = termEl;
 
 			function loadScript(src, fallbackSrc, cb) {
@@ -284,6 +289,8 @@ export function createAxilTtyBridge(root, getWasm) {
 			let fitDone = !!(window.FitAddon && (window.FitAddon.FitAddon || window.FitAddon));
 
 			function onScriptsReady() {
+				delete termEl.__attaching;
+				delete termEl.__attached;
 				if (xtermDone && fitDone && window.Terminal) {
 					attachTerm(termEl, window.Terminal);
 				}
@@ -320,7 +327,7 @@ export function createAxilTtyBridge(root, getWasm) {
 					}
 					if (term) {
 						term.write(text);
-					} else if (pendingWriteBuf.length < 50) {
+					} else if (pendingWriteBuf.length < 500) {
 						pendingWriteBuf.push(text);
 					}
 				}
@@ -329,7 +336,7 @@ export function createAxilTtyBridge(root, getWasm) {
 		writeText(text) {
 			if (term) {
 				term.write(text);
-			} else if (pendingWriteBuf.length < 50) {
+			} else if (pendingWriteBuf.length < 500) {
 				pendingWriteBuf.push(text);
 			}
 		},
