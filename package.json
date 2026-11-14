@@ -42,7 +42,7 @@
     "axil": "./axil-tty-cli.js"
   },
   "scripts": {
-    "build": "scripts build"
+    "build:bundle": "scripts build"
   },
   "repository": {
     "type": "git",

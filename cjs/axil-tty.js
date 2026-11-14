@@ -1,4 +1,13 @@
-const { createAxilTtyBridge } = require('../htdocs/axil-tty-cap.js');
+let createAxilTtyBridge;
+try {
+  ({ createAxilTtyBridge } = require('../htdocs/axil-tty-cap.js'));
+} catch (_) {
+  const fs = require('fs');
+  const path = require('path');
+  const src = fs.readFileSync(path.join(__dirname, '../htdocs/axil-tty-cap.js'), 'utf8')
+    .replace(/^\s*export\s+function\s+createAxilTtyBridge/m, 'function createAxilTtyBridge');
+  createAxilTtyBridge = new Function(src + '\nreturn createAxilTtyBridge;')();
+}
 
 let term_max = 0;
 

@@ -1,17 +1,12 @@
-// import { Terminal } from "@xterm/xterm";
-import { FitAddon } from "@xterm/addon-fit";
-import { WebLinksAddon } from "@xterm/addon-web-links";
-import "./axil-tty.css";
-
 let term_max = 0;
 
 // TODO change this to a class
 export
 function create(element, options = {}) {
   const {
-    proto = location.protocol === "https:" ? "wss" : "ws",
-    port = window.location.port, 
-    url = proto + "://" + window.location.hostname + ":" + port + '/tty',
+    proto = (typeof location !== 'undefined' && location.protocol === "https:") ? "wss" : "ws",
+    port = (typeof window !== 'undefined' && window.location) ? window.location.port : '8080', 
+    url = (typeof window !== 'undefined' && window.location) ? proto + "://" + window.location.hostname + ":" + port + '/tty' : 'ws://localhost:8080/tty',
     /* Opt-in line mode for routes with no line discipline (a game, not a
      * PTY): buffer keystrokes and submit one "<line>\n" frame per Enter
      * instead of one frame per keystroke. Off by default, and inert whenever
@@ -32,23 +27,27 @@ function create(element, options = {}) {
   // mutating what create() returns never reaches back into the caller's object.
   const sub = Object.assign({}, hookDefaults, options.sub);
 
-  const fitAddon = new FitAddon();
-  const resizeObserver = new ResizeObserver(() => fitAddon.fit());
-  const term = new globalThis.Terminal({
+  const FitAddonClass = (typeof globalThis.FitAddon === 'function') ? globalThis.FitAddon : (globalThis.FitAddon && globalThis.FitAddon.FitAddon) || (globalThis.window && (globalThis.window.FitAddon?.FitAddon || globalThis.window.FitAddon));
+  const WebLinksAddonClass = (typeof globalThis.WebLinksAddon === 'function') ? globalThis.WebLinksAddon : (globalThis.WebLinksAddon && globalThis.WebLinksAddon.WebLinksAddon) || (globalThis.window && (globalThis.window.WebLinksAddon?.WebLinksAddon || globalThis.window.WebLinksAddon));
+  const fitAddon = FitAddonClass ? new FitAddonClass() : null;
+  const ResizeObserverClass = globalThis.ResizeObserver || (globalThis.window && globalThis.window.ResizeObserver);
+  const resizeObserver = (ResizeObserverClass && fitAddon) ? new ResizeObserverClass(() => { try { fitAddon.fit(); } catch (_) {} }) : null;
+  const TermClass = globalThis.Terminal || (globalThis.window && globalThis.window.Terminal);
+  const term = TermClass ? new TermClass({
     fontSize: 13,
     fontFamily: 'Consolas,Liberation Mono,Menlo,Courier,monospace',
     allowProposedApi: true,
-  });
+  }) : null;
 
   let ws = {};
 
-  const write = data => term.write(data);
+  const write = data => { if (term && term.write) term.write(data); };
 
   const terminst = term_max;
   term_max++;
 
   function send(text) {
-    ws.send(text);
+    if (ws && ws.send) ws.send(text);
   }
 
   const decoder = new TextDecoder('utf-8');
@@ -150,21 +149,24 @@ function create(element, options = {}) {
   }
 
   function open(parent) {
+    if (!term || !parent) return term;
     parent.scrollTop = parent.scrollHeight;
-    term.loadAddon(fitAddon);
-    term.loadAddon(new WebLinksAddon());
-    term.open(parent);
+    if (fitAddon && term.loadAddon) term.loadAddon(fitAddon);
+    if (WebLinksAddonClass && term.loadAddon) term.loadAddon(new WebLinksAddonClass());
+    if (typeof term.open === 'function') term.open(parent);
     term.perm = "";
   
-    term.onResize(({ cols, rows }) => resize(cols, rows));
-    resizeObserver.observe(parent);
+    if (term.onResize) term.onResize(({ cols, rows }) => resize(cols, rows));
+    if (resizeObserver && parent) resizeObserver.observe(parent);
   
-    term.element.addEventListener("focusin", () => {
-      term.focused = true;
-    });
-    term.element.addEventListener("focusout", () => {
-      term.focused = false;
-    });
+    if (term.element && term.element.addEventListener) {
+      term.element.addEventListener("focusin", () => {
+        term.focused = true;
+      });
+      term.element.addEventListener("focusout", () => {
+        term.focused = false;
+      });
+    }
 
     term.onData(data => {
       if (options.debug)
@@ -250,6 +252,7 @@ function create(element, options = {}) {
   open(element);
 
   function connect() {
+    if (typeof WebSocket === 'undefined') return;
     ws = new WebSocket(url, 'binary');
     ws.binaryType = 'arraybuffer';
 
@@ -310,10 +313,11 @@ export class TerminalController {
   }
 }
 
-export { createAxilTtyBridge } from "./htdocs/axil-tty-cap.js";
+import { createAxilTtyBridge } from "./htdocs/axil-tty-cap.js";
+export { createAxilTtyBridge };
 
 if (typeof window !== 'undefined') {
   window.ttyAxil = { create, TerminalController };
 }
-export default { create, TerminalController };
+export default { create, TerminalController, createAxilTtyBridge };
 
