@@ -63,7 +63,8 @@ npm install -g @tty-pt/axil-tty
 ### Embed in Any Web Application
 
 ```javascript
-import { create } from "@tty-pt/axil-tty";
+import { create, TerminalController } from "@tty-pt/axil-tty";
+import { createAxilTtyBridge } from "@tty-pt/axil-tty/bridge";
 
 const term = create(document.getElementById("terminal"), {
   url: `ws://${location.hostname}:${location.port}/tty`,
@@ -75,6 +76,10 @@ const term = create(document.getElementById("terminal"), {
   }
 });
 ```
+
+For Web HAL worker runtimes and custom lifecycle management:
+- `TerminalController` manages `@xterm/xterm` lifecycle, FitAddon resizing, WebGL/canvas fallback, font readiness, and PTY event routing (with SSR/Node-safe dynamic `@xterm/xterm` loading across ESM `axil-tty.js` and CJS `cjs/axil-tty.js`).
+- `createAxilTtyBridge` (`@tty-pt/axil-tty/bridge`) and the standalone Web HAL capability modules (`htdocs/axil-tty-cap.js` and `htdocs/tty-cap.js`) register `axil_tty_*` and `tty_*` host imports for WASM workers.
 
 ---
 

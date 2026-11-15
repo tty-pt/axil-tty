@@ -1,8 +1,8 @@
 ## [1.6.0] - 2026-11-13
 
 ### Added
-- **Web HAL Bridge & TerminalController Exports (`package.json`, `types/`, `cjs/`)**:
-  - Exported standard capability bridge and `TerminalController` under `@tty-pt/axil-tty`.
+- **Web HAL Bridge & TerminalController Exports (`package.json`, `htdocs/`, `types/`, `cjs/`)**:
+  - Exported standard capability bridge (`createAxilTtyBridge` under `@tty-pt/axil-tty/bridge`), standalone Web HAL capability registration modules (`htdocs/axil-tty-cap.js` and `htdocs/tty-cap.js`), and `TerminalController` under `@tty-pt/axil-tty` with SSR/Node-safe dynamic `@xterm/xterm` loading.
   - Added CommonJS distribution wrapper in `cjs/axil-tty.js`.
   - Added TypeScript definitions in `types/axil-tty.d.ts` and `types/bridge.d.ts`.
   - Untracked gitignore entries to ensure `htdocs/`, `cjs/`, and `types/` are committed and tracked.
