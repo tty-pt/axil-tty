@@ -4,6 +4,7 @@
 
 # axil-tty
 
+[![npm](https://img.shields.io/badge/npm-@tty--pt/axil--tty-CB3837?logo=npm)](package.json)
 [![C99](https://img.shields.io/badge/C-C99-555?logo=c)](#)
 [![BSD-2-Clause](https://img.shields.io/badge/License-BSD--2--Clause-blue)](#)
 [![PTY terminals](https://img.shields.io/badge/browser-PTY-4B8BBE)](#)

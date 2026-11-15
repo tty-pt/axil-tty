@@ -16,7 +16,7 @@ case "$(uname -s)" in
 	Darwin) export DYLD_LIBRARY_PATH="$HERE/lib:${DYLD_LIBRARY_PATH:-}" ;;
 	*)      export LD_LIBRARY_PATH="$HERE/lib:${LD_LIBRARY_PATH:-}" ;;
 esac
-for dep in axil libcorm libqsys libxylem; do
+for dep in axil libcorm libstele libxylem; do
 	case "$(uname -s)" in
 		Darwin) export DYLD_LIBRARY_PATH="$HERE/../$dep/lib:${DYLD_LIBRARY_PATH:-}" ;;
 		*)      export LD_LIBRARY_PATH="$HERE/../$dep/lib:${LD_LIBRARY_PATH:-}" ;;
