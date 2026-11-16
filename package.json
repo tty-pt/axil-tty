@@ -48,7 +48,7 @@
     "type": "git",
     "url": "git+https://github.com/tty-pt/axil-tty.git"
   },
-  "author": "quirinpa",
+  "author": "Paulo Quirino <quirinpa@gmail.com>",
   "license": "BSD-2-Clause",
   "bugs": {
     "url": "https://github.com/tty-pt/axil-tty/issues"

@@ -11,6 +11,8 @@
 
 > WebSocket-to-PTY bridge module for [axil](https://github.com/tty-pt/axil) — interactive browser terminal sessions over a login shell. Canonical header is `<ttypt/axil-tty.h>`.
 
+📖 **GitHub Repository**: [https://github.com/tty-pt/axil-tty](https://github.com/tty-pt/axil-tty#readme)
+
 <p align="center">
   <img src="https://github.com/tty-pt/axil-tty/blob/main/usage.gif?raw=true" width="512" />
 </p>
@@ -117,4 +119,4 @@ sudo make install     # install module and htdocs to system
 
 ## License
 
-BSD 2-Clause License. Copyright (c) 2026, tty-pt. See `LICENSE`.
+BSD-2-Clause — Copyright (c) 2026, Paulo Quirino <quirinpa@gmail.com>. See [LICENSE](https://github.com/tty-pt/axil-tty/blob/main/LICENSE).
