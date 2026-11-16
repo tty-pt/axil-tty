@@ -7,7 +7,7 @@
 #include <ttypt/xy-mod.h>
 #include <ttypt/axil.h>
 #include <ttypt/corm.h>
-#include <ttypt/qsys.h>
+#include <ttypt/stele.h>
 
 #include <arpa/telnet.h>
 #include <errno.h>

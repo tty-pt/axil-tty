@@ -1,3 +1,26 @@
+## [1.6.1] - 2026-11-16
+
+### Changed
+- **Arch Linux (`pacman`) Packaging (`.github/workflows/ci.yml`)**:
+  - Added `pacman` to `publish_to` and `deps_pacman: "axil,libcorm,libxylem,libstele"` so `axil-tty` publishes across all 6 Unix OS targets (`deb`, `apk`, `rpm`, `pacman`, `brew`, `openbsd`).
+
+## [1.6.0] - 2026-11-13
+
+### Added
+- **Web HAL Bridge & TerminalController Exports (`package.json`, `htdocs/`, `types/`, `cjs/`)**:
+  - Exported standard capability bridge (`createAxilTtyBridge` under `@tty-pt/axil-tty/bridge`), standalone Web HAL capability registration modules (`htdocs/axil-tty-cap.js` and `htdocs/tty-cap.js`), and `TerminalController` under `@tty-pt/axil-tty` with SSR/Node-safe dynamic `@xterm/xterm` loading.
+  - Added CommonJS distribution wrapper in `cjs/axil-tty.js`.
+  - Added TypeScript definitions in `types/axil-tty.d.ts` and `types/bridge.d.ts`.
+  - Untracked gitignore entries to ensure `htdocs/`, `cjs/`, and `types/` are committed and tracked.
+
+### Fixed
+- **DOM Container Lifecycle & Write Buffering**:
+  - Enhanced DOM container unmount and remount lifecycle in `htdocs/axil-tty-bridge.js`.
+  - Added write buffering (`pendingWriteBuf`) during detached or pending bridge states to prevent early terminal write drops before mount.
+
+### Changed
+- Replaced legacy logging comments with stllog and cleaned dependencies.
+
 ## [1.5.0]
 
 - **Pure TTY Capability Bridge (`htdocs/axil-tty-bridge.js`)**:
