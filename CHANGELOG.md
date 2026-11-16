@@ -1,3 +1,9 @@
+## [1.6.1] - 2026-11-16
+
+### Changed
+- **Arch Linux (`pacman`) Packaging (`.github/workflows/ci.yml`)**:
+  - Added `pacman` to `publish_to` and `deps_pacman: "axil,libcorm,libxylem,libstele"` so `axil-tty` publishes across all 6 Unix OS targets (`deb`, `apk`, `rpm`, `pacman`, `brew`, `openbsd`).
+
 ## [1.6.0] - 2026-11-13
 
 ### Added

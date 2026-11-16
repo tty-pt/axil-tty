@@ -11,5 +11,6 @@ jobs:
     with:
       name: axil-tty
       deps: "axil,libcorm,libxylem,libstele"
-      publish_to: "deb,apk,rpm,brew,openbsd"
+      deps_pacman: "axil,libcorm,libxylem,libstele"
+      publish_to: "deb,apk,rpm,pacman,brew,openbsd"
     secrets: inherit
