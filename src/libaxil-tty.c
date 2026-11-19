@@ -490,7 +490,7 @@ command_pty(socket_t cfd, struct winsize *ws, char * const args[],
       _exit(1);
     char *alt_args[] = { id_shell, NULL };
     char * const *real_args = (args && args[0]) ? args : alt_args;
-    char home[BUFSIZ], user[BUFSIZ], shell[BUFSIZ];
+    char home[BUFSIZ + 16], user[BUFSIZ + 16], shell[BUFSIZ + 16];
     snprintf(home,  sizeof(home),  "HOME=%s",  id_dir);
     snprintf(user,  sizeof(user),  "USER=%s",  id_name);
     snprintf(shell, sizeof(shell), "SHELL=%s", (args && args[0]) ? args[0] : id_shell);
