@@ -26,14 +26,26 @@ export function createAxilTtyBridge(root, getWasm) {
 	const LINE_MAX = 1024;
 	let resizeRaf = 0;
 	let resizeObs = null;
-	let pendingWriteBuf = [];
+	let scrollbackBuf = [];
+	let scrollbackBytes = 0;
+	const SCROLLBACK_MAX_CHUNKS = 256;
+	const SCROLLBACK_MAX_BYTES = 32768;
 
-	function flushPendingWrites() {
-		if (!term || pendingWriteBuf.length === 0) return;
-		for (const chunk of pendingWriteBuf) {
+	function recordScrollback(chunk) {
+		if (!chunk || typeof chunk !== 'string') return;
+		scrollbackBuf.push(chunk);
+		scrollbackBytes += chunk.length;
+		while (scrollbackBuf.length > SCROLLBACK_MAX_CHUNKS || scrollbackBytes > SCROLLBACK_MAX_BYTES) {
+			const dropped = scrollbackBuf.shift();
+			if (dropped) scrollbackBytes -= dropped.length;
+		}
+	}
+
+	function replayScrollback() {
+		if (!term || scrollbackBuf.length === 0) return;
+		for (const chunk of scrollbackBuf) {
 			try { term.write(chunk); } catch (_) {}
 		}
-		pendingWriteBuf = [];
 	}
 
 	function attachTerm(termEl, TerminalClass) {
@@ -94,7 +106,7 @@ export function createAxilTtyBridge(root, getWasm) {
 		delete termEl.__attached;
 		term.open(termEl);
 		attachedEl = termEl;
-		flushPendingWrites();
+		replayScrollback();
 		if (fit && typeof requestAnimationFrame === 'function') {
 			requestAnimationFrame(() => {
 				try { fit.fit(); } catch (_) {}
@@ -195,12 +207,13 @@ export function createAxilTtyBridge(root, getWasm) {
 
 				// Clean ANSI or text stream
 				const decoded = new TextDecoder().decode(bytes);
+				recordScrollback(decoded);
 				term.write(decoded);
 			});
 		}
 	}
 
-	function destroyInternal() {
+	function destroyInternal(preserveHistory = false) {
 		if (resizeObs) {
 			try { resizeObs.disconnect(); } catch (_) {}
 			resizeObs = null;
@@ -224,7 +237,10 @@ export function createAxilTtyBridge(root, getWasm) {
 		}
 		fit = null;
 		line_buf = "";
-		pendingWriteBuf = [];
+		if (!preserveHistory) {
+			scrollbackBuf = [];
+			scrollbackBytes = 0;
+		}
 		will_echo = true;
 	}
 
@@ -236,7 +252,7 @@ export function createAxilTtyBridge(root, getWasm) {
 				   (typeof document !== 'undefined' && document.querySelector && document.querySelector('[data-bud-terminal]')));
 			if (!termEl) {
 				if (term && term.element && (!document.contains || !document.contains(term.element))) {
-					destroyInternal();
+					destroyInternal(true);
 				}
 				return;
 			}
@@ -248,7 +264,7 @@ export function createAxilTtyBridge(root, getWasm) {
 				if (isSameHost && (!document.contains || document.contains(termEl))) {
 					return;
 				}
-				destroyInternal();
+				destroyInternal(true);
 			}
 
 			if (termEl.__attaching && (!document.contains || document.contains(termEl))) {
@@ -291,6 +307,9 @@ export function createAxilTtyBridge(root, getWasm) {
 			function onScriptsReady() {
 				delete termEl.__attaching;
 				delete termEl.__attached;
+				if (attachedEl !== termEl || (document.contains && !document.contains(termEl))) {
+					return;
+				}
 				if (xtermDone && fitDone && window.Terminal) {
 					attachTerm(termEl, window.Terminal);
 				}
@@ -325,26 +344,24 @@ export function createAxilTtyBridge(root, getWasm) {
 						globalScope.__stele_worker_post({ type: 'stele:tty_write', text });
 						return;
 					}
+					recordScrollback(text);
 					if (term) {
 						term.write(text);
-					} else if (pendingWriteBuf.length < 500) {
-						pendingWriteBuf.push(text);
 					}
 				}
 			};
 		},
 		writeText(text) {
+			recordScrollback(text);
 			if (term) {
 				term.write(text);
-			} else if (pendingWriteBuf.length < 500) {
-				pendingWriteBuf.push(text);
 			}
 		},
 		makeTtyImports() {
 			return this.makeImports();
 		},
 		destroy() {
-			destroyInternal();
+			destroyInternal(false);
 		}
 	};
 }
