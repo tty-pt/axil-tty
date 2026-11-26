@@ -81,7 +81,7 @@ const term = create(document.getElementById("terminal"), {
 
 For Web HAL worker runtimes and custom lifecycle management:
 - `TerminalController` manages `@xterm/xterm` lifecycle, FitAddon resizing, WebGL/canvas fallback, font readiness, and PTY event routing (with SSR/Node-safe dynamic `@xterm/xterm` loading across ESM `axil-tty.js` and CJS `cjs/axil-tty.js`).
-- `createAxilTtyBridge` (`@tty-pt/axil-tty/bridge`) and the standalone Web HAL capability modules (`htdocs/axil-tty-cap.js` and `htdocs/tty-cap.js`) register `axil_tty_*` and `tty_*` host imports for WASM workers.
+- `createAxilTtyBridge` (`@tty-pt/axil-tty/bridge`) and the standalone Web HAL capability module ([htdocs/axil-tty-cap.js](htdocs/axil-tty-cap.js)) register `axil_tty_*` and `tty_*` host imports for WASM workers and preserve bounded session scrollback across DOM remounts.
 
 ---
 

@@ -1,3 +1,19 @@
+## [Unreleased]
+
+### Fixed
+- **DOM Remount Scrollback & Detached Mount Guard (`htdocs/axil-tty-cap.js`)**:
+  - Preserved bounded session scrollback (`256` chunks / `32 KiB`) across DOM remounts via `recordScrollback()` / `replayScrollback()` and guarded against attaching to detached DOM nodes (`159fc53`).
+- **PTY Child Environment Buffer Sizing (`src/libaxil-tty.c`)**:
+  - Expanded `home`, `user`, and `shell` environment string buffers in `command_pty()` to `BUFSIZ + 16` to accommodate `HOME=`, `USER=`, and `SHELL=` prefixes without truncation (`b0e2fbc`).
+
+### Removed
+- **Redundant Browser Bridge Files (`htdocs/`)**:
+  - Removed duplicate `htdocs/axil-tty-bridge.js` and `htdocs/tty-cap.js`, consolidating on `htdocs/axil-tty-cap.js` (`50f5249`).
+
+### Changed
+- **Standardized npm Metadata (`package.json`, `README.md`)**:
+  - Standardized author, `BSD-2-Clause` license, and README metadata (`aeae6ef`).
+
 ## [1.6.1] - 2026-11-16
 
 ### Changed
